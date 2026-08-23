@@ -5,10 +5,12 @@ export type AuditEventType =
   | "ORGANIZATION_CREATED"
   | "CANDIDATE_CREATED"
   | "CREDENTIAL_CREATED"
+  | "CREDENTIAL_UPDATED"
   | "CREDENTIAL_FINALIZED"
   | "CREDENTIAL_VERIFIED"
   | "CREDENTIAL_TAMPER_DETECTED"
-  | "CREDENTIAL_REVOKED";
+  | "CREDENTIAL_REVOKED"
+  | "DEGREE_CREDENTIAL_ISSUED";
 
 export type AuditLog = {
   id: string;
@@ -131,6 +133,48 @@ export class AuditRepository {
         ORDER BY created_at DESC
       `,
       [organizationId],
+    );
+
+    return result.rows.map(mapAuditLog);
+  }
+
+  async list(filters: { organizationId?: string; entityId?: string; candidateId?: string; credentialId?: string; limit?: number } = {}): Promise<AuditLog[]> {
+    const predicates: string[] = [];
+    const values: (string | number)[] = [];
+
+    if (filters.organizationId) {
+      values.push(filters.organizationId);
+      predicates.push(`organization_id = $${values.length}`);
+    }
+
+    if (filters.entityId) {
+      values.push(filters.entityId);
+      predicates.push(`entity_id = $${values.length}`);
+    }
+
+    if (filters.candidateId) {
+      values.push(filters.candidateId);
+      predicates.push(`(entity_id = $${values.length} OR event_metadata->>'candidateId' = $${values.length})`);
+    }
+
+    if (filters.credentialId) {
+      values.push(filters.credentialId);
+      predicates.push(`(entity_id = $${values.length} OR event_metadata->>'credentialId' = $${values.length})`);
+    }
+
+    const whereClause = predicates.length > 0 ? `WHERE ${predicates.join(" AND ")}` : "";
+    const limitClause = filters.limit ? `LIMIT ${filters.limit}` : "LIMIT 100";
+
+    const result = await this.database.query<AuditLogRow>(
+      `
+        SELECT id, organization_id, actor_user_id, entity_type, entity_id,
+          event_type, event_metadata, ip_hash, created_at
+        FROM audit_logs
+        ${whereClause}
+        ORDER BY created_at DESC
+        ${limitClause}
+      `,
+      values
     );
 
     return result.rows.map(mapAuditLog);

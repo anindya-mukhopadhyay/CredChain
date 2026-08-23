@@ -111,4 +111,44 @@ export class BlockchainService {
     const receipt = await tx.wait();
     return receipt.hash;
   }
+
+  async addCredentialRelationship(
+    sourceCredentialId: string,
+    targetCredentialId: string,
+    relationshipType: "DERIVED_FROM" | "PART_OF" | "SUPPORTS" | "PREREQUISITE_FOR" | number
+  ): Promise<string> {
+    const typeEnumMap: Record<string, number> = {
+      DERIVED_FROM: 0,
+      PART_OF: 1,
+      SUPPORTS: 2,
+      PREREQUISITE_FOR: 3
+    };
+    const enumVal = typeof relationshipType === "number" ? relationshipType : (typeEnumMap[relationshipType] ?? 0);
+    const contract = this.getContract(true);
+    const tx = await contract.addCredentialRelationship(
+      ethers.id(sourceCredentialId),
+      ethers.id(targetCredentialId),
+      enumVal
+    );
+    const receipt = await tx.wait();
+    return receipt.hash;
+  }
+
+  async getCredentialRelationships(credentialId: string): Promise<Array<{
+    sourceCredentialId: string;
+    targetCredentialId: string;
+    relationshipType: number;
+  }>> {
+    try {
+      const contract = this.getContract(false);
+      const rels = await contract.getCredentialRelationships(ethers.id(credentialId));
+      return rels.map((r: { sourceCredentialId: string; targetCredentialId: string; relationshipType: bigint | number }) => ({
+        sourceCredentialId: r.sourceCredentialId,
+        targetCredentialId: r.targetCredentialId,
+        relationshipType: Number(r.relationshipType)
+      }));
+    } catch {
+      return [];
+    }
+  }
 }

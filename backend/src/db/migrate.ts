@@ -6,7 +6,11 @@ import { loadDatabaseEnv } from "../config/env.js";
 
 const { Pool } = pg;
 
-const migrations = ["001_initial_schema.sql", "002_add_credential_payload.sql"];
+const migrations = [
+  "001_initial_schema.sql",
+  "002_add_credential_payload.sql",
+  "003_degree_uniqueness.sql"
+];
 
 function migrationPath(fileName: string): string {
   const currentDir = fileURLToPath(new URL(".", import.meta.url));

@@ -38,6 +38,13 @@ export function StatusBadge({ status, size = "md" }: StatusBadgeProps) {
           <span>REVOKED</span>
         </Badge>
       );
+    case "ISSUED_WITH_REVOKED_PREREQUISITE":
+      return (
+        <Badge variant="danger" size={size}>
+          <AlertCircle className="w-3.5 h-3.5 text-rose-600" />
+          <span>REVOKED PREREQUISITE</span>
+        </Badge>
+      );
     default:
       return (
         <Badge variant="secondary" size={size}>

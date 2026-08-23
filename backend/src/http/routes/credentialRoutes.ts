@@ -168,6 +168,52 @@ export const credentialRoutes: FastifyPluginCallback<CredentialRouteOptions> = (
     reply.send(logs);
   });
 
+  app.get("/api/v1/candidates/:id/degree-eligibility", async (request, reply) => {
+    const idParamSchema = z.object({
+      id: z.string().uuid("Invalid candidate ID format")
+    });
+
+    const parseResult = idParamSchema.safeParse(request.params);
+    if (!parseResult.success) {
+      throw badRequest(parseResult.error.issues[0].message);
+    }
+
+    const eligibility = await service.checkDegreeEligibility(parseResult.data.id, "BTECH");
+    reply.send(eligibility);
+  });
+
+  app.post("/api/v1/credentials/degree", async (request, reply) => {
+    const issueDegreeSchema = z.object({
+      candidateId: z.string().uuid("Invalid candidateId format"),
+      organizationId: z.string().uuid("Invalid organizationId format"),
+      programName: z.string().optional(),
+      degreeTitle: z.string().optional(),
+      graduationDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "graduationDate must be YYYY-MM-DD format").optional()
+    });
+
+    const parseResult = issueDegreeSchema.safeParse(request.body);
+    if (!parseResult.success) {
+      throw badRequest(parseResult.error.issues[0].message);
+    }
+
+    const degree = await service.issueDegree(parseResult.data);
+    reply.code(201).send(degree);
+  });
+
+  app.get("/api/v1/credentials/:id/relationships", async (request, reply) => {
+    const idParamSchema = z.object({
+      id: z.string().uuid("Invalid credential ID format")
+    });
+
+    const parseResult = idParamSchema.safeParse(request.params);
+    if (!parseResult.success) {
+      throw badRequest(parseResult.error.issues[0].message);
+    }
+
+    const rels = await service.getRelationships(parseResult.data.id);
+    reply.send(rels);
+  });
+
   app.post("/api/v1/credentials/:id/revoke", async (request, reply) => {
     const idParamSchema = z.object({
       id: z.string().uuid("Invalid credential ID format")

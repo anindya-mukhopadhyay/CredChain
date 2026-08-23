@@ -50,6 +50,26 @@ export type SemesterPayload = {
   [key: string]: unknown;
 };
 
+export type AcademicClassification =
+  | "FIRST_CLASS_WITH_DISTINCTION"
+  | "FIRST_CLASS"
+  | "SECOND_CLASS"
+  | "PASS";
+
+export type BTechDegreePayload = {
+  programType: "BTECH";
+  programName: string;
+  degreeTitle: string;
+  totalSemesters: 8;
+  cumulativeGpa: number;
+  totalCreditsEarned: number;
+  classification: AcademicClassification;
+  semesterCredentialIds: string[];
+  issueYear?: string;
+  graduationDate?: string;
+  [key: string]: unknown;
+};
+
 export type Credential = {
   id: string;
   credentialNumber: string;
@@ -70,10 +90,55 @@ export type Credential = {
   updatedAt: string;
 };
 
+export type SemesterEligibilityCheck = {
+  semesterNumber: number;
+  credentialId?: string;
+  credentialNumber?: string;
+  status?: CredentialStatus;
+  resultStatus?: "PASS" | "FAIL" | "WITHHELD";
+  semesterGpa?: number;
+  credits?: number;
+  isCompleted: boolean;
+  isPassed: boolean;
+  isRevoked: boolean;
+  isValid: boolean;
+  issues: string[];
+};
+
+export type DegreeEligibilityResult = {
+  candidateId: string;
+  organizationId: string;
+  programType: "BTECH";
+  programName: string;
+  isEligible: boolean;
+  totalRequiredSemesters: 8;
+  completedSemestersCount: number;
+  passedSemestersCount: number;
+  cumulativeGpa: number;
+  totalCreditsEarned: number;
+  projectedClassification: AcademicClassification;
+  semesters: SemesterEligibilityCheck[];
+  ineligibilityReasons: string[];
+};
+
+export type ConstituentSemesterVerification = {
+  semesterNumber: number;
+  credentialId: string;
+  credentialNumber: string;
+  status: VerificationStatus;
+  isPassed: boolean;
+  semesterGpa: number;
+  credits: number;
+  hashMismatch?: boolean;
+  dbHash?: string | null;
+  blockchainHash?: string | null;
+};
+
 export type VerificationStatus =
   | "VERIFIED"
   | "TAMPERED"
   | "REVOKED"
+  | "ISSUED_WITH_REVOKED_PREREQUISITE"
   | "NOT_FOUND"
   | "INVALID"
   | "PENDING_BLOCKCHAIN";
@@ -84,16 +149,41 @@ export type VerificationResult = {
   computedHash?: string;
   blockchainHash?: string;
   hashMismatch?: boolean;
+  degreeDetails?: {
+    programName: string;
+    degreeTitle: string;
+    cumulativeGpa: number;
+    totalCreditsEarned: number;
+    classification: AcademicClassification;
+    totalSemesters: number;
+  };
+  chainVerification?: {
+    isChainValid: boolean;
+    totalConstituentSemesters: number;
+    verifiedSemestersCount: number;
+    constituentSemesters: ConstituentSemesterVerification[];
+    chainIssues: string[];
+  };
+};
+
+export type CredentialRelationship = {
+  id: string;
+  sourceCredentialId: string;
+  targetCredentialId: string;
+  relationshipType: "DERIVED_FROM" | "PART_OF" | "SUPPORTS" | "PREREQUISITE_FOR";
+  createdAt: string;
 };
 
 export type AuditEventType =
   | "ORGANIZATION_CREATED"
   | "CANDIDATE_CREATED"
   | "CREDENTIAL_CREATED"
+  | "CREDENTIAL_UPDATED"
   | "CREDENTIAL_FINALIZED"
   | "CREDENTIAL_VERIFIED"
   | "CREDENTIAL_TAMPER_DETECTED"
-  | "CREDENTIAL_REVOKED";
+  | "CREDENTIAL_REVOKED"
+  | "DEGREE_CREDENTIAL_ISSUED";
 
 export type AuditLog = {
   id: string;
@@ -113,5 +203,5 @@ export type DashboardStats = {
   issuedCredentials: number;
   draftCredentials: number;
   revokedCredentials: number;
-  verifiedCredentials: number;
+  verifiedCredentials?: number;
 };

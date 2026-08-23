@@ -104,14 +104,16 @@ export default function CredentialDetailPage() {
     );
   }
 
-  const payload = credential.credentialPayload as unknown as SemesterPayload;
-  const subjects = Array.isArray(payload.subjects) ? payload.subjects : [];
-  const semNumber = typeof payload.semester === "number" ? payload.semester : 1;
+  const isDegree = credential.credentialType === "BTECH_DEGREE";
+  const degreePayload = credential.credentialPayload as unknown as import("@/types").BTechDegreePayload;
+  const payload = (credential.credentialPayload || {}) as SemesterPayload;
+  const semNumber = payload.semester ?? 1;
+  const subjects = (Array.isArray(payload.subjects) ? payload.subjects : []) as import("@/types").SubjectItem[];
 
   return (
     <div className="space-y-6">
-      {/* Top Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-2 border-b border-slate-200/60">
+      {/* Header and Actions */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-slate-200/60">
         <div className="flex items-center gap-3">
           <Link href="/credentials">
             <Button variant="ghost" size="sm" className="p-2">
@@ -119,64 +121,56 @@ export default function CredentialDetailPage() {
             </Button>
           </Link>
           <div>
-            <div className="flex items-center gap-2.5">
+            <div className="flex items-center gap-2">
               <h2 className="text-2xl font-bold tracking-tight text-slate-900 font-mono">
                 {credential.credentialNumber}
               </h2>
               <StatusBadge status={credential.status} />
             </div>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Type: {credential.credentialType.replace(/_/g, " ")} • ID: {credential.id}
+            <p className="text-xs text-slate-500 mt-1">
+              UUID: <span className="font-mono text-slate-700">{credential.id}</span>
             </p>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
+        {/* Action Buttons depending on status */}
+        <div className="flex items-center gap-2">
           {credential.status === "DRAFT" && (
-            <Button onClick={() => setIsFinalizeOpen(true)} className="gap-1.5 shadow-sm">
+            <Button onClick={() => setIsFinalizeOpen(true)} className="gap-1.5 bg-emerald-600 hover:bg-emerald-700">
               <Lock className="w-4 h-4" />
-              Finalize Credential
+              Finalize & Register
             </Button>
           )}
 
-          {credential.status === "ISSUED" && (
-            <>
-              <Link href={`/verify/${credential.id}`}>
-                <Button variant="success" size="md" className="gap-1.5">
-                  <ShieldCheck className="w-4 h-4" />
-                  Verify On-Chain
-                </Button>
-              </Link>
-              <Button
-                variant="outline"
-                size="md"
-                onClick={() => setIsRevokeOpen(true)}
-                className="text-rose-700 hover:bg-rose-50 border-rose-200"
-              >
-                <AlertTriangle className="w-4 h-4" />
-                Revoke
-              </Button>
-            </>
+          {(credential.status === "FINALIZED" || credential.status === "ISSUED") && (
+            <Button
+              variant="outline"
+              onClick={() => setIsRevokeOpen(true)}
+              className="gap-1.5 text-rose-600 border-rose-200 hover:bg-rose-50"
+            >
+              <AlertTriangle className="w-4 h-4" />
+              Revoke
+            </Button>
           )}
 
-          {credential.status === "REVOKED" && (
+          {credential.status !== "DRAFT" && (
             <Link href={`/verify/${credential.id}`}>
-              <Button variant="outline" size="sm" className="gap-1.5 text-rose-700">
-                <ShieldAlert className="w-4 h-4" />
-                View Revocation State
+              <Button variant="outline" className="gap-1.5 border-sky-200 text-sky-700 hover:bg-sky-50">
+                <ShieldCheck className="w-4 h-4" />
+                Public Verification Portal
               </Button>
             </Link>
           )}
         </div>
       </div>
 
-      {/* Revocation Banner if revoked */}
+      {/* Revocation Alert Banner if REVOKED */}
       {credential.status === "REVOKED" && (
-        <div className="p-4 bg-rose-50 border border-rose-200 text-rose-900 rounded-xl flex items-center gap-3">
-          <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0" />
-          <div className="text-xs space-y-0.5">
-            <p className="font-bold uppercase tracking-wider">Credential Has Been Revoked</p>
-            <p className="text-rose-800">
+        <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl flex items-center gap-3 text-rose-900">
+          <ShieldAlert className="w-5 h-5 text-rose-600 shrink-0" />
+          <div className="text-xs">
+            <span className="font-bold block">This Credential Has Been Revoked</span>
+            <p className="text-rose-700 mt-0.5">
               This credential was officially invalidated by the issuing authority and is recorded as inactive on-chain.
             </p>
           </div>
@@ -216,18 +210,21 @@ export default function CredentialDetailPage() {
                   </span>
                 )}
               </div>
-
               <div>
                 <span className="text-slate-500 block">Program & Semester</span>
                 <span className="font-semibold text-slate-900 mt-1 block">
-                  {payload.program || "Undergraduate Program"} — Semester {semNumber}
+                  {isDegree
+                    ? `${degreePayload.programName || "Bachelor of Technology"} (Degree)`
+                    : `${payload.program || "Undergraduate Program"} — Semester ${semNumber}`}
                 </span>
               </div>
 
               <div>
                 <span className="text-slate-500 block">Academic Session</span>
                 <span className="font-semibold text-slate-900 mt-1 block">
-                  {payload.academicYear || "2024-2025"}
+                  {isDegree
+                    ? `Graduation ${degreePayload.issueYear || degreePayload.graduationDate || "2025"}`
+                    : payload.academicYear || "2024-2025"}
                 </span>
               </div>
 
@@ -247,88 +244,139 @@ export default function CredentialDetailPage() {
             </CardContent>
           </Card>
 
-          {/* Academic Marksheet / Subjects Table */}
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <div>
-                <CardTitle className="text-base">Marksheet Statement of Marks</CardTitle>
-                <CardDescription>
-                  Semester {semNumber} course components and grades
-                </CardDescription>
-              </div>
-              <div className="text-right">
-                <span className="text-xs font-semibold text-slate-500 block">Result Status</span>
-                <span
-                  className={`text-xs font-bold px-2 py-0.5 rounded ${
-                    payload.result === "PASS"
-                      ? "bg-emerald-100 text-emerald-800"
-                      : "bg-rose-100 text-rose-800"
-                  }`}
-                >
-                  {payload.result || "PASS"}
-                </span>
-              </div>
-            </CardHeader>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-slate-50/80 border-b border-slate-200 text-slate-600 font-semibold uppercase">
-                  <tr>
-                    <th className="px-6 py-3">Subject Code</th>
-                    <th className="px-6 py-3">Subject Title</th>
-                    <th className="px-6 py-3 text-center">Credits</th>
-                    <th className="px-6 py-3 text-center">Grade</th>
-                    <th className="px-6 py-3 text-right">Marks</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {subjects.length === 0 ? (
+          {/* If BTECH_DEGREE: Render Official Degree Certificate View */}
+          {isDegree ? (
+            <Card className="border-indigo-200 bg-linear-to-b from-white to-slate-50/50 shadow-sm overflow-hidden">
+              <CardHeader className="bg-linear-to-r from-slate-900 via-indigo-950 to-slate-900 text-white p-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-indigo-400 text-xs font-bold uppercase tracking-wider">
+                      Official Degree Certificate
+                    </div>
+                    <CardTitle className="text-xl text-white mt-1">
+                      {degreePayload.degreeTitle || "Bachelor of Technology"}
+                    </CardTitle>
+                  </div>
+                  <div className="text-right">
+                    <span className="bg-amber-400/20 border border-amber-400/30 text-amber-300 px-3 py-1 rounded-full text-xs font-bold">
+                      {(degreePayload.classification || "PASS").replace(/_/g, " ")}
+                    </span>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="p-6 space-y-6">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+                  <div className="bg-white p-4 rounded-xl border border-slate-200">
+                    <div className="text-slate-500 text-xs">Cumulative GPA</div>
+                    <div className="text-2xl font-bold text-indigo-600 mt-1">
+                      {Number(degreePayload.cumulativeGpa || 0).toFixed(2)}
+                      <span className="text-sm font-normal text-slate-400"> / 10.0</span>
+                    </div>
+                  </div>
+                  <div className="bg-white p-4 rounded-xl border border-slate-200">
+                    <div className="text-slate-500 text-xs">Total Credits Earned</div>
+                    <div className="text-2xl font-bold text-slate-900 mt-1">
+                      {degreePayload.totalCreditsEarned || 0}
+                    </div>
+                  </div>
+                  <div className="bg-white p-4 rounded-xl border border-slate-200">
+                    <div className="text-slate-500 text-xs">Total Semesters</div>
+                    <div className="text-2xl font-bold text-slate-900 mt-1">
+                      8 / 8 Completed
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-3">
+                    Anchored 8-Semester Progression DAG Chain
+                  </div>
+                  <RelationshipVisualizer
+                    degreeCredentialId={credential.id}
+                    degreeStatus={credential.status}
+                    degreeTitle={degreePayload.degreeTitle || "B.Tech Degree"}
+                    cgpa={Number(degreePayload.cumulativeGpa)}
+                  />
+                </div>
+              </CardContent>
+            </Card>
+          ) : (
+            /* Academic Marksheet / Subjects Table */
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between">
+                <div>
+                  <CardTitle className="text-base">Marksheet Statement of Marks</CardTitle>
+                  <CardDescription>
+                    Semester {semNumber} course components and grades
+                  </CardDescription>
+                </div>
+                <div className="text-right">
+                  <span className="text-xs font-semibold text-slate-500 block">Result Status</span>
+                  <span
+                    className={`text-xs font-bold px-2 py-0.5 rounded ${
+                      payload.result === "PASS"
+                        ? "bg-emerald-100 text-emerald-800"
+                        : "bg-rose-100 text-rose-800"
+                    }`}
+                  >
+                    {payload.result || "PASS"}
+                  </span>
+                </div>
+              </CardHeader>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-50/80 border-b border-slate-200 text-slate-600 font-semibold uppercase">
                     <tr>
-                      <td colSpan={5} className="px-6 py-4 text-center text-slate-400">
-                        No subject modules specified in payload.
-                      </td>
+                      <th className="px-6 py-3">Subject Code</th>
+                      <th className="px-6 py-3">Subject Title</th>
+                      <th className="px-6 py-3 text-center">Credits</th>
+                      <th className="px-6 py-3 text-center">Grade</th>
+                      <th className="px-6 py-3 text-right">Marks</th>
                     </tr>
-                  ) : (
-                    subjects.map((sub, idx) => (
-                      <tr key={idx} className="hover:bg-slate-50/50">
-                        <td className="px-6 py-3 font-mono font-bold text-slate-900">
-                          {sub.subjectCode}
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {subjects.map((sub: import("@/types").SubjectItem, i: number) => (
+                      <tr key={i} className="hover:bg-slate-50/50">
+                        <td className="px-6 py-3 font-mono font-medium text-slate-700">
+                          {sub.subjectCode || `SUB-${i + 1}`}
                         </td>
-                        <td className="px-6 py-3 text-slate-700 font-medium">{sub.subjectName}</td>
-                        <td className="px-6 py-3 text-center font-mono">{sub.credits}</td>
-                        <td className="px-6 py-3 text-center font-bold text-slate-900">
-                          <span className="px-2 py-0.5 rounded bg-slate-100 border border-slate-200">
-                            {sub.grade}
-                          </span>
+                        <td className="px-6 py-3 font-medium text-slate-900">
+                          {sub.subjectName || "Subject"}
                         </td>
-                        <td className="px-6 py-3 text-right font-mono text-slate-600">
-                          {sub.marks ?? "—"}
+                        <td className="px-6 py-3 text-center text-slate-600">{sub.credits || 0}</td>
+                        <td className="px-6 py-3 text-center font-bold text-slate-800">
+                          {sub.grade || "P"}
+                        </td>
+                        <td className="px-6 py-3 text-right text-slate-600">
+                          {sub.marks !== undefined ? sub.marks : "-"}
                         </td>
                       </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {/* GPA Summary footer */}
+              <div className="px-6 py-4 bg-slate-50/70 border-t border-slate-100 flex items-center justify-between text-xs">
+                <span className="text-slate-500 font-medium">Semester Grade Point Average (SGPA):</span>
+                <span className="font-bold text-base text-slate-900">
+                  {payload.semesterGpa ?? "—"} / 10.0
+                </span>
+              </div>
+            </Card>
+          )}
 
-            {/* GPA Summary footer */}
-            <div className="px-6 py-4 bg-slate-50/70 border-t border-slate-100 flex items-center justify-between text-xs">
-              <span className="text-slate-500 font-medium">Semester Grade Point Average (SGPA):</span>
-              <span className="font-bold text-base text-slate-900">
-                {payload.semesterGpa ?? "—"} / 10.0
-              </span>
-            </div>
-          </Card>
-
-          {/* Academic Progression Sequence */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-sm">Academic Chain Progression</CardTitle>
-              <CardDescription>Credential relationship links for multi-semester curriculum</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <RelationshipVisualizer currentSemester={semNumber} />
-            </CardContent>
-          </Card>
+          {/* Academic Progression Sequence for marksheets */}
+          {credential.credentialType !== "BTECH_DEGREE" && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-sm">Academic Chain Progression</CardTitle>
+                <CardDescription>Credential relationship links for multi-semester curriculum</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <RelationshipVisualizer currentSemester={semNumber} />
+              </CardContent>
+            </Card>
+          )}
         </div>
 
         {/* Right Column (1 Col) */}

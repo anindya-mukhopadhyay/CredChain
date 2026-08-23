@@ -191,6 +191,26 @@ function NewCredentialContent() {
         </div>
       </div>
 
+      {/* Degree Hub Callout Banner */}
+      <div className="bg-indigo-50/80 border border-indigo-200/80 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+        <div className="flex items-center gap-2.5">
+          <div className="p-2 bg-indigo-600 text-white rounded-lg">
+            <Award className="w-4 h-4" />
+          </div>
+          <div>
+            <div className="font-bold text-indigo-950">Looking to Issue an 8-Semester B.Tech Degree?</div>
+            <div className="text-indigo-800">
+              Evaluate full academic eligibility, CGPA calculations, and issue Merkle-anchored degree certificates.
+            </div>
+          </div>
+        </div>
+        <Link href="/credentials/degree" className="shrink-0">
+          <Button variant="outline" size="sm" className="bg-white border-indigo-300 text-indigo-700 hover:bg-indigo-50 font-bold">
+            Open Degree Hub
+          </Button>
+        </Link>
+      </div>
+
       <form onSubmit={handleSubmit} className="space-y-6">
         {/* Core Metadata Card */}
         <Card>

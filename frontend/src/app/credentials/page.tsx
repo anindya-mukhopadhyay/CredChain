@@ -78,12 +78,20 @@ function CredentialsListContent() {
             Manage academic marksheets, training records, and verify integrity on the blockchain.
           </p>
         </div>
-        <Link href="/credentials/new">
-          <Button className="gap-1.5 self-start">
-            <PlusCircle className="w-4 h-4" />
-            Issue Marksheet
-          </Button>
-        </Link>
+        <div className="flex items-center gap-2.5">
+          <Link href="/credentials/degree">
+            <Button variant="outline" className="gap-1.5 border-indigo-200 text-indigo-700 hover:bg-indigo-50">
+              <Award className="w-4 h-4 text-indigo-600" />
+              Degree Evaluation Hub
+            </Button>
+          </Link>
+          <Link href="/credentials/new">
+            <Button className="gap-1.5 self-start">
+              <PlusCircle className="w-4 h-4" />
+              Issue Marksheet
+            </Button>
+          </Link>
+        </div>
       </div>
 
       {/* Filter and Search Bar */}

@@ -1,14 +1,23 @@
-import type { CredentialRepository, Credential } from "../repositories/credentialRepository.js";
+import type { CredentialRepository, Credential, CredentialRelationship } from "../repositories/credentialRepository.js";
 import type { OrganizationRepository } from "../repositories/organizationRepository.js";
 import type { CandidateRepository } from "../repositories/candidateRepository.js";
 import type { AuditRepository, AuditLog } from "../repositories/auditRepository.js";
 import { badRequest, notFound } from "../errors/apiError.js";
-import type { JsonObject, CanonicalCredential, CredentialStatus } from "../domain/credentials/types.js";
+import type {
+  JsonObject,
+  CanonicalCredential,
+  CredentialStatus,
+  DegreeEligibilityResult,
+  SemesterEligibilityCheck,
+  AcademicClassification,
+  BTechDegreePayload
+} from "../domain/credentials/types.js";
 import { hashCanonicalCredential } from "../domain/credentials/canonicalCredential.js";
 import type { TransactionalDatabase, DatabaseClient } from "../db/pool.js";
 import { withTransaction } from "../db/pool.js";
 import type { BlockchainService } from "./blockchain/blockchainService.js";
-interface RawSubject {
+
+export interface RawSubject {
   subjectCode?: string;
   code?: string;
   subjectName?: string;
@@ -22,9 +31,23 @@ export type VerificationStatus =
   | "VERIFIED"
   | "TAMPERED"
   | "REVOKED"
+  | "ISSUED_WITH_REVOKED_PREREQUISITE"
   | "NOT_FOUND"
   | "INVALID"
   | "PENDING_BLOCKCHAIN";
+
+export type ConstituentSemesterVerification = {
+  semesterNumber: number;
+  credentialId: string;
+  credentialNumber: string;
+  status: VerificationStatus;
+  isPassed: boolean;
+  semesterGpa: number;
+  credits: number;
+  hashMismatch?: boolean;
+  dbHash?: string | null;
+  blockchainHash?: string | null;
+};
 
 export type VerificationResult = {
   status: VerificationStatus;
@@ -32,6 +55,21 @@ export type VerificationResult = {
   dbHash?: string | null;
   computedHash?: string;
   blockchainHash?: string | null;
+  degreeDetails?: {
+    programName: string;
+    degreeTitle: string;
+    cumulativeGpa: number;
+    totalCreditsEarned: number;
+    classification: AcademicClassification;
+    totalSemesters: number;
+  };
+  chainVerification?: {
+    isChainValid: boolean;
+    totalConstituentSemesters: number;
+    verifiedSemestersCount: number;
+    constituentSemesters: ConstituentSemesterVerification[];
+    chainIssues: string[];
+  };
 };
 
 export function mapToCanonical(credential: Credential): CanonicalCredential {
@@ -97,6 +135,30 @@ export function mapToCanonical(credential: Credential): CanonicalCredential {
     }
   }
 
+  if (credential.credentialType === "BTECH_DEGREE" && payload) {
+    const totalSemesters = 8;
+    const cumulativeGpa = typeof payload.cumulativeGpa === "number" ? payload.cumulativeGpa : 0;
+    const totalCreditsEarned = typeof payload.totalCreditsEarned === "number" ? payload.totalCreditsEarned : 0;
+    const classification = (payload.classification as AcademicClassification) || "PASS";
+    const semesterCredentialIds = Array.isArray(payload.semesterCredentialIds)
+      ? (payload.semesterCredentialIds as string[])
+      : [];
+
+    canonical.degree = {
+      programType: "BTECH",
+      programName: typeof payload.programName === "string" ? payload.programName : "Bachelor of Technology",
+      degreeTitle: typeof payload.degreeTitle === "string" ? payload.degreeTitle : "Bachelor of Technology",
+      totalSemesters,
+      cumulativeGpa,
+      totalCreditsEarned,
+      classification,
+      semesterCredentialIds
+    };
+
+    // The degree cryptographic commitment hash binds all constituent semester IDs (sorted)
+    canonical.parentCredentialIds = [...semesterCredentialIds].sort();
+  }
+
   return canonical;
 }
 
@@ -117,25 +179,43 @@ export class CredentialService {
     organizationId: string;
     expiryDate?: string | null;
     credentialPayload: JsonObject;
+    issuerUserId?: string | null;
   }): Promise<Credential> {
-    const org = await this.orgRepo.findById(input.organizationId);
-    if (!org) throw notFound("Organization");
-
     const candidate = await this.candidateRepo.findById(input.candidateId);
     if (!candidate) throw notFound("Candidate");
 
+    const org = await this.orgRepo.findById(input.organizationId);
+    if (!org) throw notFound("Organization");
+
     if (candidate.organizationId !== input.organizationId) {
-      throw badRequest("Candidate does not belong to the issuing organization");
+      throw badRequest("Candidate does not belong to the issuing organization", "INVALID_ORGANIZATION");
     }
 
-    const created = await this.repo.createDraft(input);
+    const created = await withTransaction(this.pool, async (client) => {
+      const RepoClass = this.repo.constructor as new (db: DatabaseClient) => CredentialRepository;
+      const AuditRepoClass = this.auditRepo.constructor as new (db: DatabaseClient) => AuditRepository;
+      const txRepo = new RepoClass(client);
+      const txAuditRepo = new AuditRepoClass(client);
 
-    await this.auditRepo.create({
-      organizationId: input.organizationId,
-      entityType: "credential",
-      entityId: created.id,
-      eventType: "CREDENTIAL_CREATED",
-      eventMetadata: { credentialNumber: input.credentialNumber }
+      const credential = await txRepo.createDraft({
+        credentialNumber: input.credentialNumber,
+        credentialType: input.credentialType,
+        candidateId: input.candidateId,
+        organizationId: input.organizationId,
+        expiryDate: input.expiryDate,
+        credentialPayload: input.credentialPayload
+      });
+
+      await txAuditRepo.create({
+        organizationId: input.organizationId,
+        actorUserId: input.issuerUserId || null,
+        entityType: "credential",
+        entityId: credential.id,
+        eventType: "CREDENTIAL_CREATED",
+        eventMetadata: { credentialType: input.credentialType, credentialNumber: input.credentialNumber }
+      });
+
+      return credential;
     });
 
     return created;
@@ -149,16 +229,34 @@ export class CredentialService {
     return this.repo.list(filters);
   }
 
-  async updateDraftPayload(id: string, credentialPayload: JsonObject): Promise<Credential> {
+  async updateDraftPayload(id: string, payload: JsonObject, actorUserId?: string): Promise<Credential> {
     const credential = await this.repo.findById(id);
     if (!credential) throw notFound("Credential");
 
     if (credential.status !== "DRAFT") {
-      throw badRequest(`Cannot update credential payload in ${credential.status} status`);
+      throw badRequest("Only DRAFT credentials can have their payload updated");
     }
 
-    const updated = await this.repo.updateDraftPayload(id, credentialPayload);
-    if (!updated) throw notFound("Credential");
+    const updated = await withTransaction(this.pool, async (client) => {
+      const RepoClass = this.repo.constructor as new (db: DatabaseClient) => CredentialRepository;
+      const AuditRepoClass = this.auditRepo.constructor as new (db: DatabaseClient) => AuditRepository;
+      const txRepo = new RepoClass(client);
+      const txAuditRepo = new AuditRepoClass(client);
+
+      const res = await txRepo.updateDraftPayload(id, payload);
+      if (!res) throw notFound("Credential");
+
+      await txAuditRepo.create({
+        organizationId: credential.organizationId,
+        actorUserId: actorUserId || null,
+        entityType: "credential",
+        entityId: id,
+        eventType: "CREDENTIAL_UPDATED",
+        eventMetadata: { updatedFields: ["credentialPayload"] }
+      });
+
+      return res;
+    });
 
     return updated;
   }
@@ -181,6 +279,21 @@ export class CredentialService {
 
     const canonical = mapToCanonical(tempCredential);
     const hash = hashCanonicalCredential(canonical);
+
+    // Prerequisite check for Semester marksheets
+    let prevSemesterCredentialId: string | null = null;
+    if (credential.credentialType === "BTECH_SEMESTER_MARKSHEET") {
+      const semNumber = typeof credential.credentialPayload.semester === "number"
+        ? credential.credentialPayload.semester
+        : 1;
+
+      if (semNumber > 1) {
+        const prevSem = await this.repo.findSemesterCredential(credential.candidateId, semNumber - 1);
+        if (prevSem) {
+          prevSemesterCredentialId = prevSem.id;
+        }
+      }
+    }
 
     const finalized = await withTransaction(this.pool, async (client) => {
       const RepoClass = this.repo.constructor as new (db: DatabaseClient) => CredentialRepository;
@@ -213,6 +326,20 @@ export class CredentialService {
             resultStatus: resultStatus as "PASS" | "FAIL" | "WITHHELD",
             subjects,
             finalizedAt
+          });
+        }
+
+        // Link relationships in DB: S_{N-1} PREREQUISITE_FOR S_N, and S_N DERIVED_FROM S_{N-1}
+        if (prevSemesterCredentialId) {
+          await txRepo.createRelationship({
+            sourceCredentialId: prevSemesterCredentialId,
+            targetCredentialId: id,
+            relationshipType: "PREREQUISITE_FOR"
+          });
+          await txRepo.createRelationship({
+            sourceCredentialId: id,
+            targetCredentialId: prevSemesterCredentialId,
+            relationshipType: "DERIVED_FROM"
           });
         }
       }
@@ -256,12 +383,282 @@ export class CredentialService {
           [finalized.id, txId]
         );
 
+        // If this has a prerequisite, register relationship on blockchain
+        if (prevSemesterCredentialId) {
+          try {
+            await this.blockchainService.addCredentialRelationship(
+              prevSemesterCredentialId,
+              finalized.id,
+              "PREREQUISITE_FOR"
+            );
+            await this.blockchainService.addCredentialRelationship(
+              finalized.id,
+              prevSemesterCredentialId,
+              "DERIVED_FROM"
+            );
+          } catch (relErr) {
+            console.error(`On-chain prerequisite linking note: ${(relErr as Error).message}`);
+          }
+        }
+
         const finalizedWithTx = await this.repo.findById(id);
         return finalizedWithTx || finalized;
       } catch (err: unknown) {
         const error = err as Error;
-        // Log error but keep status as FINALIZED (effectively PENDING_BLOCKCHAIN)
         console.error(`Blockchain registration failed for credential ${finalized.id}: ${error.message}`);
+      }
+    }
+
+    return finalized;
+  }
+
+  async checkDegreeEligibility(
+    candidateId: string,
+    programType: "BTECH" = "BTECH"
+  ): Promise<DegreeEligibilityResult> {
+    const candidate = await this.candidateRepo.findById(candidateId);
+    if (!candidate) throw notFound("Candidate");
+
+    const candidateCredentials = await this.repo.list({ candidateId });
+    // Strict academic chain filtering: must belong to the candidate and match BTECH_SEMESTER_MARKSHEET
+    const marksheetCredentials = candidateCredentials.filter(
+      (c) => c.credentialType === "BTECH_SEMESTER_MARKSHEET" && c.candidateId === candidateId
+    );
+
+    const semesters: SemesterEligibilityCheck[] = [];
+    const ineligibilityReasons: string[] = [];
+
+    let totalCredits = 0;
+    let weightedPoints = 0;
+    let programName = "Bachelor of Technology in Computer Science & Engineering";
+
+    for (let sem = 1; sem <= 8; sem++) {
+      const issues: string[] = [];
+      // Find matching marksheet for this semester
+      const cred = marksheetCredentials.find((c) => {
+        const payloadSem = typeof c.credentialPayload?.semester === "number" ? c.credentialPayload.semester : 0;
+        return payloadSem === sem;
+      });
+
+      if (!cred) {
+        issues.push(`Semester ${sem} marksheet has not been registered`);
+        semesters.push({
+          semesterNumber: sem,
+          isCompleted: false,
+          isPassed: false,
+          isRevoked: false,
+          isValid: false,
+          issues
+        });
+        ineligibilityReasons.push(`Missing Semester ${sem} credential`);
+        continue;
+      }
+
+      if (cred.organizationId !== candidate.organizationId) {
+        issues.push(`Semester ${sem} credential was issued by a different organization`);
+        ineligibilityReasons.push(`Semester ${sem} issuing organization mismatch`);
+      }
+
+      if (cred.credentialPayload?.program && typeof cred.credentialPayload.program === "string") {
+        programName = cred.credentialPayload.program;
+      }
+
+      const isRevoked = await this.repo.isRevoked(cred.id) || cred.status === "REVOKED";
+      if (isRevoked) {
+        issues.push(`Semester ${sem} credential (#${cred.credentialNumber}) is REVOKED`);
+        ineligibilityReasons.push(`Semester ${sem} is revoked`);
+      }
+
+      const isFinalized = cred.status === "FINALIZED" || cred.status === "ISSUED";
+      if (!isFinalized) {
+        issues.push(`Semester ${sem} is still in ${cred.status} status (must be FINALIZED/ISSUED)`);
+        ineligibilityReasons.push(`Semester ${sem} is not finalized`);
+      }
+
+      const payload = cred.credentialPayload;
+      const resultStatus = payload.result === "PASS" ? "PASS" : payload.result === "FAIL" ? "FAIL" : "WITHHELD";
+      const isPassed = resultStatus === "PASS";
+      if (!isPassed) {
+        issues.push(`Semester ${sem} result status is ${resultStatus}`);
+        ineligibilityReasons.push(`Semester ${sem} was not passed`);
+      }
+
+      // Hash integrity check
+      const canonical = mapToCanonical(cred);
+      const computedHash = hashCanonicalCredential(canonical);
+      const isHashValid = cred.canonicalHash ? computedHash === cred.canonicalHash : false;
+      if (cred.canonicalHash && !isHashValid) {
+        issues.push(`Semester ${sem} data integrity check failed (Tampered hash)`);
+        ineligibilityReasons.push(`Semester ${sem} data integrity check failed`);
+      }
+
+      // Compute semester credits and SGPA avoiding intermediate rounding truncation
+      const rawSubjects = Array.isArray(payload.subjects) ? (payload.subjects as RawSubject[]) : [];
+      let semCredits = 0;
+      let semWeightedPoints = 0;
+      for (const s of rawSubjects) {
+        const cr = typeof s.credits === "number" ? s.credits : 0;
+        const gr = typeof s.grade === "string" ? s.grade.toUpperCase() : "";
+        let pts = 0;
+        if (gr === "A" || gr === "O" || gr === "A+") pts = 10;
+        else if (gr === "B" || gr === "B+") pts = 8;
+        else if (gr === "C" || gr === "C+") pts = 6;
+        else if (gr === "D" || gr === "D+") pts = 4;
+        else pts = 0;
+
+        semCredits += cr;
+        semWeightedPoints += pts * cr;
+      }
+
+      let sgpa = typeof payload.semesterGpa === "number" ? payload.semesterGpa : 0;
+      if (semCredits > 0) {
+        sgpa = Number((semWeightedPoints / semCredits).toFixed(2));
+        totalCredits += semCredits;
+        weightedPoints += semWeightedPoints;
+      } else if (typeof payload.credits === "number" && payload.credits > 0 && sgpa > 0) {
+        totalCredits += payload.credits;
+        weightedPoints += sgpa * payload.credits;
+      }
+
+      const isValid = issues.length === 0;
+
+      semesters.push({
+        semesterNumber: sem,
+        credentialId: cred.id,
+        credentialNumber: cred.credentialNumber,
+        status: cred.status,
+        resultStatus: resultStatus as "PASS" | "FAIL" | "WITHHELD",
+        semesterGpa: sgpa,
+        credits: semCredits,
+        isCompleted: isFinalized,
+        isPassed,
+        isRevoked,
+        isValid,
+        issues
+      });
+    }
+
+    const completedSemestersCount = semesters.filter((s) => s.isCompleted).length;
+    const passedSemestersCount = semesters.filter((s) => s.isPassed && !s.isRevoked && s.isValid).length;
+    const isEligible = passedSemestersCount === 8 && ineligibilityReasons.length === 0;
+
+    const cumulativeGpa = totalCredits > 0 ? Number((weightedPoints / totalCredits).toFixed(2)) : 0;
+
+    let projectedClassification: AcademicClassification = "PASS";
+    if (cumulativeGpa >= 8.50) {
+      projectedClassification = "FIRST_CLASS_WITH_DISTINCTION";
+    } else if (cumulativeGpa >= 6.50) {
+      projectedClassification = "FIRST_CLASS";
+    } else if (cumulativeGpa >= 5.00) {
+      projectedClassification = "SECOND_CLASS";
+    }
+
+    return {
+      candidateId,
+      organizationId: candidate.organizationId,
+      programType,
+      programName,
+      isEligible,
+      totalRequiredSemesters: 8,
+      completedSemestersCount,
+      passedSemestersCount,
+      cumulativeGpa,
+      totalCreditsEarned: totalCredits,
+      projectedClassification,
+      semesters,
+      ineligibilityReasons
+    };
+  }
+
+  async issueDegree(input: {
+    candidateId: string;
+    organizationId: string;
+    programName?: string;
+    degreeTitle?: string;
+    graduationDate?: string;
+    issuerUserId?: string | null;
+  }): Promise<Credential> {
+    const eligibility = await this.checkDegreeEligibility(input.candidateId, "BTECH");
+    if (!eligibility.isEligible) {
+      throw badRequest(
+        `Candidate is not eligible for B.Tech Degree: ${eligibility.ineligibilityReasons.join("; ")}`,
+        "INELIGIBLE_FOR_DEGREE"
+      );
+    }
+
+    const candidate = await this.candidateRepo.findById(input.candidateId);
+    if (!candidate) throw notFound("Candidate");
+
+    if (candidate.organizationId !== input.organizationId) {
+      throw badRequest("Candidate does not belong to the issuing organization", "INVALID_ORGANIZATION");
+    }
+
+    // Check if active degree already exists for this candidate
+    const existingCreds = await this.repo.list({ candidateId: input.candidateId });
+    const existingDegree = existingCreds.find((c) => c.credentialType === "BTECH_DEGREE" && c.status !== "REVOKED");
+    if (existingDegree) {
+      throw badRequest(`B.Tech Degree has already been issued for this candidate (Credential #${existingDegree.credentialNumber})`, "DEGREE_ALREADY_ISSUED");
+    }
+
+    const semesterCredentialIds = eligibility.semesters.map((s) => s.credentialId!);
+
+    const degreePayload: BTechDegreePayload = {
+      programType: "BTECH",
+      programName: input.programName || eligibility.programName,
+      degreeTitle: input.degreeTitle || "Bachelor of Technology",
+      totalSemesters: 8,
+      cumulativeGpa: eligibility.cumulativeGpa,
+      totalCreditsEarned: eligibility.totalCreditsEarned,
+      classification: eligibility.projectedClassification,
+      semesterCredentialIds,
+      graduationDate: input.graduationDate || new Date().toISOString().slice(0, 10),
+      issueYear: new Date().getFullYear().toString()
+    };
+
+    const credentialNumber = `CC-DEG-BTECH-${Date.now().toString().slice(-6)}-${Math.floor(Math.random() * 1000)}`;
+
+    let draft: Credential;
+    try {
+      draft = await this.createDraft({
+        credentialNumber,
+        credentialType: "BTECH_DEGREE",
+        candidateId: input.candidateId,
+        organizationId: input.organizationId,
+        credentialPayload: degreePayload as unknown as JsonObject,
+        issuerUserId: input.issuerUserId
+      });
+    } catch (err: unknown) {
+      const error = err as Error & { code?: string };
+      if (error.message?.includes("unique") || error.code === "23505") {
+        throw badRequest("A B.Tech Degree has already been issued for this candidate", "DEGREE_ALREADY_ISSUED");
+      }
+      throw err;
+    }
+
+    // Record DERIVED_FROM relationships in PostgreSQL: Degree DERIVED_FROM S_i
+    for (const semCredId of semesterCredentialIds) {
+      await this.repo.createRelationship({
+        sourceCredentialId: draft.id,
+        targetCredentialId: semCredId,
+        relationshipType: "DERIVED_FROM"
+      });
+    }
+
+    // Finalize the degree
+    const finalized = await this.finalize(draft.id);
+
+    // Register on-chain relationships for all 8 semesters
+    if (this.blockchainService) {
+      for (const semCredId of semesterCredentialIds) {
+        try {
+          await this.blockchainService.addCredentialRelationship(
+            finalized.id,
+            semCredId,
+            "DERIVED_FROM"
+          );
+        } catch (relErr) {
+          console.error(`On-chain degree relationship linking note: ${(relErr as Error).message}`);
+        }
       }
     }
 
@@ -296,55 +693,133 @@ export class CredentialService {
       };
     }
 
-    if (!this.blockchainService) {
-      return {
-        status: "PENDING_BLOCKCHAIN",
-        dbHash,
-        computedHash
-      };
+    let rootStatus: VerificationStatus = "PENDING_BLOCKCHAIN";
+    let blockchainHash: string | null = null;
+
+    if (this.blockchainService) {
+      try {
+        const proof = await this.blockchainService.getCredential(id);
+
+        if (!proof) {
+          rootStatus = "PENDING_BLOCKCHAIN";
+        } else if (proof.status === 2) {
+          return { status: "REVOKED" };
+        } else {
+          const computedHashWithPrefix = computedHash.startsWith("0x") ? computedHash : `0x${computedHash}`;
+          if (proof.documentHash !== computedHashWithPrefix) {
+            return {
+              status: "TAMPERED",
+              hashMismatch: true,
+              dbHash,
+              computedHash,
+              blockchainHash: proof.documentHash
+            };
+          }
+          rootStatus = "VERIFIED";
+          blockchainHash = proof.documentHash;
+        }
+      } catch (err: unknown) {
+        const error = err as Error;
+        console.error(`Error reading from blockchain for verification: ${error.message}`);
+        rootStatus = "PENDING_BLOCKCHAIN";
+      }
     }
 
-    try {
-      const proof = await this.blockchainService.getCredential(id);
+    // If credential is a B.Tech Degree, recursively verify its 8 constituent semesters
+    if (credential.credentialType === "BTECH_DEGREE") {
+      const payload = credential.credentialPayload as unknown as BTechDegreePayload;
+      const semIds = Array.isArray(payload.semesterCredentialIds) ? payload.semesterCredentialIds : [];
 
-      if (!proof) {
-        return {
-          status: "PENDING_BLOCKCHAIN",
-          dbHash,
-          computedHash
-        };
+      const constituentSemesters: ConstituentSemesterVerification[] = [];
+      const chainIssues: string[] = [];
+
+      for (let i = 0; i < semIds.length; i++) {
+        const semId = semIds[i];
+        const semCred = await this.repo.findById(semId);
+
+        if (!semCred) {
+          chainIssues.push(`Constituent semester ${i + 1} record not found (${semId})`);
+          constituentSemesters.push({
+            semesterNumber: i + 1,
+            credentialId: semId,
+            credentialNumber: "UNKNOWN",
+            status: "NOT_FOUND",
+            isPassed: false,
+            semesterGpa: 0,
+            credits: 0
+          });
+          continue;
+        }
+
+        const semVerify = await this.verify(semCred.id);
+        const semPayload = semCred.credentialPayload;
+        const semNum = typeof semPayload.semester === "number" ? semPayload.semester : i + 1;
+        const isPassed = semPayload.result === "PASS";
+        const semGpa = typeof semPayload.semesterGpa === "number" ? semPayload.semesterGpa : 0;
+        const subjects = Array.isArray(semPayload.subjects) ? (semPayload.subjects as RawSubject[]) : [];
+        const credits = subjects.reduce((sum: number, s: RawSubject) => sum + (Number(s.credits) || 0), 0);
+
+        if (semVerify.status !== "VERIFIED" && semVerify.status !== "PENDING_BLOCKCHAIN") {
+          chainIssues.push(`Semester ${semNum} verification failed with status: ${semVerify.status}`);
+        }
+        if (!isPassed) {
+          chainIssues.push(`Semester ${semNum} has non-passing result status`);
+        }
+
+        constituentSemesters.push({
+          semesterNumber: semNum,
+          credentialId: semCred.id,
+          credentialNumber: semCred.credentialNumber,
+          status: semVerify.status,
+          isPassed,
+          semesterGpa: semGpa,
+          credits,
+          hashMismatch: semVerify.hashMismatch,
+          dbHash: semVerify.dbHash,
+          blockchainHash: semVerify.blockchainHash
+        });
       }
 
-      if (proof.status === 2) {
-        return { status: "REVOKED" };
-      }
+      const isChainValid = chainIssues.length === 0 && constituentSemesters.length === 8;
+      const verifiedSemestersCount = constituentSemesters.filter((s) => s.status === "VERIFIED" || s.status === "PENDING_BLOCKCHAIN").length;
 
-      const computedHashWithPrefix = computedHash.startsWith("0x") ? computedHash : `0x${computedHash}`;
-      if (proof.documentHash !== computedHashWithPrefix) {
-        return {
-          status: "TAMPERED",
-          hashMismatch: true,
-          dbHash,
-          computedHash,
-          blockchainHash: proof.documentHash
-        };
+      // Revocation semantics: Distinguish degree itself revoked vs degree with revoked prerequisite
+      let finalDegreeStatus: VerificationStatus = rootStatus;
+      if (constituentSemesters.some((s) => s.status === "REVOKED")) {
+        finalDegreeStatus = "ISSUED_WITH_REVOKED_PREREQUISITE";
+      } else if (constituentSemesters.some((s) => s.status === "TAMPERED")) {
+        finalDegreeStatus = "TAMPERED";
       }
 
       return {
-        status: "VERIFIED",
+        status: finalDegreeStatus,
         dbHash,
         computedHash,
-        blockchainHash: proof.documentHash
-      };
-    } catch (err: unknown) {
-      const error = err as Error;
-      console.error(`Error reading from blockchain for verification: ${error.message}`);
-      return {
-        status: "PENDING_BLOCKCHAIN",
-        dbHash,
-        computedHash
+        blockchainHash,
+        degreeDetails: {
+          programName: payload.programName || "Bachelor of Technology",
+          degreeTitle: payload.degreeTitle || "Bachelor of Technology",
+          cumulativeGpa: payload.cumulativeGpa || 0,
+          totalCreditsEarned: payload.totalCreditsEarned || 0,
+          classification: payload.classification || "PASS",
+          totalSemesters: 8
+        },
+        chainVerification: {
+          isChainValid,
+          totalConstituentSemesters: semIds.length,
+          verifiedSemestersCount,
+          constituentSemesters,
+          chainIssues
+        }
       };
     }
+
+    return {
+      status: rootStatus,
+      dbHash,
+      computedHash,
+      blockchainHash
+    };
   }
 
   async revoke(id: string, reasonCode: string, note?: string, actorUserId?: string): Promise<Credential> {
@@ -396,74 +871,59 @@ export class CredentialService {
     return updated;
   }
 
+  async getRelationships(credentialId: string): Promise<CredentialRelationship[]> {
+    return this.repo.getRelationships(credentialId);
+  }
+
   async getStats(organizationId?: string): Promise<{
     totalCandidates: number;
     totalCredentials: number;
     issuedCredentials: number;
     draftCredentials: number;
     revokedCredentials: number;
-    verifiedCredentials: number;
   }> {
-    const candidateFilter = organizationId ? { organizationId } : {};
-    const credentialFilter = organizationId ? { organizationId } : {};
+    const orgFilter = organizationId ? "WHERE organization_id = $1" : "";
+    const orgParams = organizationId ? [organizationId] : [];
 
-    const [candidates, credentials] = await Promise.all([
-      this.candidateRepo.list(candidateFilter),
-      this.repo.list(credentialFilter)
-    ]);
+    const credOrgFilter = organizationId ? "WHERE organization_id = $1" : "";
 
-    const totalCandidates = candidates.length;
-    const totalCredentials = credentials.length;
-    const issuedCredentials = credentials.filter((c) => c.status === "ISSUED").length;
-    const draftCredentials = credentials.filter((c) => c.status === "DRAFT" || c.status === "FINALIZED").length;
-    const revokedCredentials = credentials.filter((c) => c.status === "REVOKED").length;
-    const verifiedCredentials = issuedCredentials;
+    const candRes = await this.pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text as count FROM candidates ${orgFilter}`,
+      orgParams
+    );
+
+    const credRes = await this.pool.query<{ status: string; count: string }>(
+      `SELECT status, COUNT(*)::text as count FROM credentials ${credOrgFilter} GROUP BY status`,
+      orgParams
+    );
+
+    let totalCredentials = 0;
+    let issuedCredentials = 0;
+    let draftCredentials = 0;
+    let revokedCredentials = 0;
+
+    for (const row of credRes.rows) {
+      const count = parseInt(row.count, 10) || 0;
+      totalCredentials += count;
+      if (row.status === "ISSUED" || row.status === "FINALIZED") {
+        issuedCredentials += count;
+      } else if (row.status === "DRAFT") {
+        draftCredentials += count;
+      } else if (row.status === "REVOKED") {
+        revokedCredentials += count;
+      }
+    }
 
     return {
-      totalCandidates,
+      totalCandidates: parseInt(candRes.rows[0]?.count || "0", 10) || 0,
       totalCredentials,
       issuedCredentials,
       draftCredentials,
-      revokedCredentials,
-      verifiedCredentials
+      revokedCredentials
     };
   }
 
-  async getAuditLogs(filters: { organizationId?: string; credentialId?: string; candidateId?: string } = {}): Promise<AuditLog[]> {
-    if (filters.credentialId) {
-      return this.auditRepo.listByCredential(filters.credentialId);
-    }
-    if (filters.candidateId) {
-      return this.auditRepo.listByCandidate(filters.candidateId);
-    }
-    if (filters.organizationId) {
-      return this.auditRepo.listByOrganization(filters.organizationId);
-    }
-
-    const result = await this.pool.query<{
-      id: string;
-      organization_id: string | null;
-      actor_user_id: string | null;
-      entity_type: string;
-      entity_id: string | null;
-      event_type: string;
-      event_metadata: JsonObject;
-      ip_hash: string | null;
-      created_at: Date;
-    }>(
-      "SELECT id, organization_id, actor_user_id, entity_type, entity_id, event_type, event_metadata, ip_hash, created_at FROM audit_logs ORDER BY created_at DESC LIMIT 50"
-    );
-
-    return result.rows.map((row) => ({
-      id: row.id,
-      organizationId: row.organization_id,
-      actorUserId: row.actor_user_id,
-      entityType: row.entity_type,
-      entityId: row.entity_id,
-      eventType: row.event_type,
-      eventMetadata: row.event_metadata,
-      ipHash: row.ip_hash,
-      createdAt: row.created_at.toISOString()
-    }));
+  async getAuditLogs(filters: { organizationId?: string; entityId?: string; limit?: number } = {}): Promise<AuditLog[]> {
+    return this.auditRepo.list(filters);
   }
 }

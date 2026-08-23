@@ -204,6 +204,30 @@ export default function VerifyResultPage() {
         </div>
       )}
 
+      {/* 3b. ISSUED_WITH_REVOKED_PREREQUISITE */}
+      {verifyResult.status === "ISSUED_WITH_REVOKED_PREREQUISITE" && (
+        <div className="bg-rose-700 text-white rounded-2xl p-6 sm:p-8 shadow-xl space-y-4 animate-in zoom-in-95 duration-200">
+          <div className="flex items-start justify-between">
+            <div className="space-y-1">
+              <span className="text-xs uppercase tracking-widest font-bold text-rose-200">
+                Prerequisite Invalidation Detected
+              </span>
+              <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
+                REVOKED PREREQUISITE
+              </h2>
+            </div>
+            <div className="p-3 bg-rose-500/40 rounded-2xl border border-rose-400/50">
+              <AlertTriangle className="w-8 h-8 sm:w-10 sm:h-10 text-white" />
+            </div>
+          </div>
+
+          <p className="text-xs text-rose-100 leading-relaxed border-t border-rose-600/50 pt-3">
+            This degree credential is registered on-chain, but one or more underlying prerequisite semester credentials
+            have been officially REVOKED by the issuing university.
+          </p>
+        </div>
+      )}
+
       {/* 4. PENDING_BLOCKCHAIN */}
       {verifyResult.status === "PENDING_BLOCKCHAIN" && (
         <div className="bg-sky-700 text-white rounded-2xl p-6 sm:p-8 shadow-xl space-y-3">
@@ -292,6 +316,97 @@ export default function VerifyResultPage() {
               </div>
             </div>
 
+            {/* Degree Chain Verification Breakdown if BTech Degree */}
+            {verifyResult.chainVerification && (
+              <div className="space-y-4 pt-2">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3.5 bg-indigo-50/80 border border-indigo-200 rounded-xl">
+                  <div className="space-y-0.5">
+                    <div className="font-bold text-indigo-950 text-xs flex items-center gap-1.5">
+                      <Lock className="w-3.5 h-3.5 text-indigo-600" />
+                      Constituent 8-Semester Academic Chain Proofs
+                    </div>
+                    <div className="text-[11px] text-indigo-800">
+                      {verifyResult.chainVerification.verifiedSemestersCount} of {verifyResult.chainVerification.totalConstituentSemesters} semester marksheets cryptographically verified
+                    </div>
+                  </div>
+                  {verifyResult.degreeDetails && (
+                    <div className="flex items-center gap-2">
+                      <span className="bg-indigo-600 text-white text-[11px] font-bold px-2.5 py-1 rounded-md">
+                        CGPA: {verifyResult.degreeDetails.cumulativeGpa.toFixed(2)} / 10.0
+                      </span>
+                      <span className="bg-white border border-indigo-300 text-indigo-900 text-[11px] font-bold px-2.5 py-1 rounded-md">
+                        {verifyResult.degreeDetails.classification.replace(/_/g, " ")}
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="overflow-x-auto rounded-xl border border-slate-200">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
+                      <tr>
+                        <th className="px-4 py-2.5">Semester</th>
+                        <th className="px-4 py-2.5">Credential #</th>
+                        <th className="px-4 py-2.5 text-center">Result</th>
+                        <th className="px-4 py-2.5 text-center">SGPA</th>
+                        <th className="px-4 py-2.5 text-center">Credits</th>
+                        <th className="px-4 py-2.5 text-right">Verification Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {verifyResult.chainVerification.constituentSemesters.map((sem) => (
+                        <tr key={sem.semesterNumber} className="hover:bg-slate-50/50">
+                          <td className="px-4 py-2.5 font-bold text-slate-900">
+                            Semester {sem.semesterNumber}
+                          </td>
+                          <td className="px-4 py-2.5 font-mono text-slate-600">
+                            {sem.credentialNumber}
+                          </td>
+                          <td className="px-4 py-2.5 text-center">
+                            <span
+                              className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                sem.isPassed
+                                  ? "bg-emerald-100 text-emerald-800"
+                                  : "bg-rose-100 text-rose-800"
+                              }`}
+                            >
+                              {sem.isPassed ? "PASS" : "FAIL"}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2.5 text-center font-semibold text-slate-800">
+                            {sem.semesterGpa ? sem.semesterGpa.toFixed(2) : "—"}
+                          </td>
+                          <td className="px-4 py-2.5 text-center text-slate-600">
+                            {sem.credits}
+                          </td>
+                          <td className="px-4 py-2.5 text-right">
+                            <span
+                              className={`inline-flex items-center gap-1 font-bold text-[11px] ${
+                                sem.status === "VERIFIED"
+                                  ? "text-emerald-700"
+                                  : sem.status === "TAMPERED"
+                                  ? "text-rose-700"
+                                  : sem.status === "REVOKED"
+                                  ? "text-rose-800"
+                                  : "text-amber-700"
+                              }`}
+                            >
+                              {sem.status === "VERIFIED" ? (
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 inline" />
+                              ) : (
+                                <AlertTriangle className="w-3.5 h-3.5 text-rose-600 inline" />
+                              )}
+                              {sem.status}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
             {/* Academic Marksheet components if present */}
             {payload?.subjects && (
               <div className="space-y-3 pt-2">
@@ -312,7 +427,7 @@ export default function VerifyResultPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {payload.subjects.map((sub, i) => (
+                      {payload.subjects.map((sub: import("@/types").SubjectItem, i: number) => (
                         <tr key={i}>
                           <td className="px-4 py-2 font-mono font-medium">{sub.subjectCode}</td>
                           <td className="px-4 py-2">{sub.subjectName}</td>

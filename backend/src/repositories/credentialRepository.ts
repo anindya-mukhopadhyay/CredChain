@@ -41,8 +41,48 @@ type CredentialRow = {
   updated_at: Date;
 };
 
+export type CredentialRelationship = {
+  id: string;
+  sourceCredentialId: string;
+  targetCredentialId: string;
+  relationshipType: "DERIVED_FROM" | "PART_OF" | "SUPPORTS" | "PREREQUISITE_FOR";
+  createdAt: string;
+};
+
+export type SemesterResultRecord = {
+  id: string;
+  credentialId: string;
+  candidateId: string;
+  semesterNumber: number;
+  resultStatus: "PASS" | "FAIL" | "WITHHELD";
+  semesterGpa: number | null;
+  overallGpa: number | null;
+  subjects: JsonObject[];
+  finalizedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 type SemesterResultRow = {
   id: string;
+  credential_id: string;
+  candidate_id: string;
+  semester_number: number;
+  result_status: "PASS" | "FAIL" | "WITHHELD";
+  semester_gpa: string | number | null;
+  overall_gpa: string | number | null;
+  subjects: JsonObject[];
+  finalized_at: Date | null;
+  created_at: Date;
+  updated_at: Date;
+};
+
+type RelationshipRow = {
+  id: string;
+  source_credential_id: string;
+  target_credential_id: string;
+  relationship_type: "DERIVED_FROM" | "PART_OF" | "SUPPORTS" | "PREREQUISITE_FOR";
+  created_at: Date;
 };
 
 function mapDateOnly(value: Date | string | null): string | null {
@@ -298,6 +338,119 @@ export class CredentialRepository {
     );
 
     return result.rows[0]?.exists ?? false;
+  }
+
+  async createRelationship(input: {
+    sourceCredentialId: string;
+    targetCredentialId: string;
+    relationshipType: "DERIVED_FROM" | "PART_OF" | "SUPPORTS" | "PREREQUISITE_FOR";
+  }): Promise<void> {
+    await this.database.query(
+      `
+        INSERT INTO credential_relationships (
+          source_credential_id,
+          target_credential_id,
+          relationship_type
+        )
+        VALUES ($1, $2, $3)
+        ON CONFLICT (source_credential_id, target_credential_id, relationship_type)
+        DO NOTHING
+      `,
+      [input.sourceCredentialId, input.targetCredentialId, input.relationshipType],
+    );
+  }
+
+  async getRelationships(credentialId: string): Promise<CredentialRelationship[]> {
+    const result = await this.database.query<RelationshipRow>(
+      `
+        SELECT id, source_credential_id, target_credential_id, relationship_type, created_at
+        FROM credential_relationships
+        WHERE source_credential_id = $1 OR target_credential_id = $1
+        ORDER BY created_at ASC
+      `,
+      [credentialId],
+    );
+
+    return result.rows.map((row) => ({
+      id: row.id,
+      sourceCredentialId: row.source_credential_id,
+      targetCredentialId: row.target_credential_id,
+      relationshipType: row.relationship_type,
+      createdAt: row.created_at.toISOString(),
+    }));
+  }
+
+  async getSemesterResultsByCandidate(candidateId: string): Promise<SemesterResultRecord[]> {
+    const result = await this.database.query<SemesterResultRow>(
+      `
+        SELECT
+          id,
+          credential_id,
+          candidate_id,
+          semester_number,
+          result_status,
+          semester_gpa,
+          overall_gpa,
+          subjects,
+          finalized_at,
+          created_at,
+          updated_at
+        FROM semester_results
+        WHERE candidate_id = $1
+        ORDER BY semester_number ASC
+      `,
+      [candidateId],
+    );
+
+    return result.rows.map((row) => ({
+      id: row.id,
+      credentialId: row.credential_id,
+      candidateId: row.candidate_id,
+      semesterNumber: row.semester_number,
+      resultStatus: row.result_status,
+      semesterGpa: row.semester_gpa !== null ? Number(row.semester_gpa) : null,
+      overallGpa: row.overall_gpa !== null ? Number(row.overall_gpa) : null,
+      subjects: row.subjects || [],
+      finalizedAt: row.finalized_at ? row.finalized_at.toISOString() : null,
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+    }));
+  }
+
+  async findSemesterCredential(
+    candidateId: string,
+    semesterNumber: number
+  ): Promise<Credential | null> {
+    const result = await this.database.query<CredentialRow>(
+      `
+        SELECT
+          c.id,
+          c.credential_number,
+          c.credential_type,
+          c.candidate_id,
+          c.organization_id,
+          c.issuer_user_id,
+          c.issue_date,
+          c.expiry_date,
+          c.status,
+          c.canonical_hash,
+          c.document_uri,
+          c.verification_url,
+          c.blockchain_tx_id,
+          c.credential_payload,
+          c.finalized_at,
+          c.created_at,
+          c.updated_at
+        FROM credentials c
+        JOIN semester_results sr ON sr.credential_id = c.id
+        WHERE sr.candidate_id = $1 AND sr.semester_number = $2
+        ORDER BY c.created_at DESC
+        LIMIT 1
+      `,
+      [candidateId, semesterNumber],
+    );
+
+    return result.rows[0] ? mapCredential(result.rows[0]) : null;
   }
 }
 

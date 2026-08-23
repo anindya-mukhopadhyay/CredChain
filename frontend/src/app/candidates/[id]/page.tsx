@@ -3,10 +3,11 @@
 import React, { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { getCandidate, listCredentials, listOrganizations } from "@/lib/api";
-import type { Candidate, Credential, Organization } from "@/types";
+import { getCandidate, listCredentials, listOrganizations, getDegreeEligibility } from "@/lib/api";
+import type { Candidate, Credential, Organization, DegreeEligibilityResult } from "@/types";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/Card";
 import { StatusBadge } from "@/components/credentials/StatusBadge";
+import { DegreeEligibilityCard } from "@/components/credentials/DegreeEligibilityCard";
 import { Button } from "@/components/ui/Button";
 import { Spinner } from "@/components/ui/Spinner";
 import { formatDate } from "@/lib/utils";
@@ -19,6 +20,7 @@ export default function CandidateDetailPage() {
   const [candidate, setCandidate] = useState<Candidate | null>(null);
   const [organization, setOrganization] = useState<Organization | null>(null);
   const [credentials, setCredentials] = useState<Credential[]>([]);
+  const [eligibility, setEligibility] = useState<DegreeEligibilityResult | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -37,6 +39,14 @@ export default function CandidateDetailPage() {
         setCredentials(creds);
         const foundOrg = orgs.find((o) => o.id === cand.organizationId);
         setOrganization(foundOrg || null);
+
+        // Load academic degree eligibility if marksheets exist
+        try {
+          const elig = await getDegreeEligibility(id);
+          setEligibility(elig);
+        } catch {
+          // Non-academic or no marks
+        }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : "Failed to load candidate record";
         setError(message);
@@ -130,6 +140,21 @@ export default function CandidateDetailPage() {
             </div>
           </CardContent>
         </Card>
+
+        {/* Academic Degree Progression Card if candidate has marksheets */}
+        {eligibility && eligibility.completedSemestersCount > 0 && (
+          <div className="md:col-span-3">
+            <DegreeEligibilityCard
+              eligibility={eligibility}
+              candidateName={`${candidate.givenName} ${candidate.familyName}`}
+              onDegreeIssued={() => {
+                // reload candidate credentials
+                listCredentials({ candidateId: id }).then(setCredentials);
+                getDegreeEligibility(id).then(setEligibility);
+              }}
+            />
+          </div>
+        )}
 
         {/* Credential Records */}
         <Card className="md:col-span-2">

@@ -110,6 +110,36 @@ export async function revokeCredential(
   });
 }
 
+// Academic Degree & Chain Management
+export async function getDegreeEligibility(
+  candidateId: string
+): Promise<import("@/types").DegreeEligibilityResult> {
+  return apiClient<import("@/types").DegreeEligibilityResult>(
+    `/api/v1/candidates/${candidateId}/degree-eligibility`
+  );
+}
+
+export async function issueDegree(input: {
+  candidateId: string;
+  organizationId: string;
+  programName?: string;
+  degreeTitle?: string;
+  graduationDate?: string;
+}): Promise<Credential> {
+  return apiClient<Credential>("/api/v1/credentials/degree", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function getCredentialRelationships(
+  credentialId: string
+): Promise<import("@/types").CredentialRelationship[]> {
+  return apiClient<import("@/types").CredentialRelationship[]>(
+    `/api/v1/credentials/${credentialId}/relationships`
+  );
+}
+
 // Dashboard Stats & Audits
 export async function getDashboardStats(organizationId?: string): Promise<DashboardStats> {
   return apiClient<DashboardStats>("/api/v1/dashboard/stats", {
