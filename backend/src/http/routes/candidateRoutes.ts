@@ -58,6 +58,20 @@ export const candidateRoutes: FastifyPluginCallback<CandidateRouteOptions> = (
     reply.code(201).send(candidate);
   });
 
+  app.get("/api/v1/candidates", async (request, reply) => {
+    const querySchema = z.object({
+      organizationId: z.string().uuid().optional()
+    });
+
+    const parseResult = querySchema.safeParse(request.query);
+    if (!parseResult.success) {
+      throw badRequest("Invalid organizationId filter");
+    }
+
+    const candidates = await service.list(parseResult.data);
+    reply.send(candidates);
+  });
+
   app.get("/api/v1/candidates/:id", async (request, reply) => {
     const paramsSchema = z.object({
       id: z.string().uuid("Invalid candidate ID format")

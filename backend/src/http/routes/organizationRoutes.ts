@@ -40,10 +40,12 @@ export const organizationRoutes: FastifyPluginCallback<OrganizationRouteOptions>
       organizationType: parseResult.data.type
     });
 
-    reply.code(211); // wait, let's see. Should it be 201 (Created) or 200 (OK)? 
-    // Usually 201 is standard. But wait! The prompt says "Return the created organization. Validate required fields." 
-    // Let's use 201 for POST (Created). It is the standard REST status.
     reply.code(201).send(org);
+  });
+
+  app.get("/api/v1/organizations", async (_request, reply) => {
+    const orgs = await service.list();
+    reply.send(orgs);
   });
 
   done();

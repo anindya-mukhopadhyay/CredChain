@@ -20,7 +20,7 @@ export type BlockchainCredentialProof = {
 
 export class BlockchainService {
   private readonly provider: ethers.JsonRpcProvider | null = null;
-  private readonly wallet: ethers.Wallet | null = null;
+  private readonly wallet: ethers.ContractRunner | null = null;
   public readonly contractAddress: string | null = null;
 
   constructor(
@@ -35,7 +35,8 @@ export class BlockchainService {
       this.contractAddress = contractAddress;
     }
     if (privateKey && this.provider) {
-      this.wallet = new ethers.Wallet(privateKey, this.provider);
+      const baseWallet = new ethers.Wallet(privateKey, this.provider);
+      this.wallet = new ethers.NonceManager(baseWallet);
     }
   }
 
@@ -103,7 +104,10 @@ export class BlockchainService {
 
   async revokeCredential(credentialId: string, reasonCode: string): Promise<string> {
     const contract = this.getContract(true);
-    const tx = await contract.revokeCredential(ethers.id(credentialId), ethers.id(reasonCode));
+    const tx = await contract.revokeCredential(
+      ethers.id(credentialId),
+      ethers.id(reasonCode)
+    );
     const receipt = await tx.wait();
     return receipt.hash;
   }

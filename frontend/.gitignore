@@ -1,0 +1,19 @@
+# Next.js build output
+.next/
+out/
+
+# Dependencies
+node_modules/
+
+# Production
+build/
+dist/
+
+# Tests & coverage
+coverage/
+
+# Misc
+.DS_Store
+*.pem
+tsconfig.tsbuildinfo
+next-env.d.ts

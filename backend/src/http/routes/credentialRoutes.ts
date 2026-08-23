@@ -122,6 +122,52 @@ export const credentialRoutes: FastifyPluginCallback<CredentialRouteOptions> = (
     reply.send(result);
   });
 
+  app.get("/api/v1/credentials", async (request, reply) => {
+    const querySchema = z.object({
+      organizationId: z.string().uuid().optional(),
+      candidateId: z.string().uuid().optional(),
+      status: z.enum(["DRAFT", "FINALIZED", "ISSUED", "REVOKED"]).optional()
+    });
+
+    const parseResult = querySchema.safeParse(request.query);
+    if (!parseResult.success) {
+      throw badRequest("Invalid credential filter parameters");
+    }
+
+    const credentials = await service.list(parseResult.data);
+    reply.send(credentials);
+  });
+
+  app.get("/api/v1/dashboard/stats", async (request, reply) => {
+    const querySchema = z.object({
+      organizationId: z.string().uuid().optional()
+    });
+
+    const parseResult = querySchema.safeParse(request.query);
+    if (!parseResult.success) {
+      throw badRequest("Invalid organizationId parameter");
+    }
+
+    const stats = await service.getStats(parseResult.data.organizationId);
+    reply.send(stats);
+  });
+
+  app.get("/api/v1/audit-logs", async (request, reply) => {
+    const querySchema = z.object({
+      organizationId: z.string().uuid().optional(),
+      credentialId: z.string().uuid().optional(),
+      candidateId: z.string().uuid().optional()
+    });
+
+    const parseResult = querySchema.safeParse(request.query);
+    if (!parseResult.success) {
+      throw badRequest("Invalid audit filter parameters");
+    }
+
+    const logs = await service.getAuditLogs(parseResult.data);
+    reply.send(logs);
+  });
+
   app.post("/api/v1/credentials/:id/revoke", async (request, reply) => {
     const idParamSchema = z.object({
       id: z.string().uuid("Invalid credential ID format")

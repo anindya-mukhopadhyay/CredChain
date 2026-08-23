@@ -5,7 +5,8 @@
   "description": "Blockchain-backed credential verification MVP with off-chain sensitive data and on-chain credential proofs.",
   "workspaces": [
     "backend",
-    "blockchain"
+    "blockchain",
+    "frontend"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",

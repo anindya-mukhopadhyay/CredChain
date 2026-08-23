@@ -1,7 +1,7 @@
 import type { CredentialRepository, Credential } from "../repositories/credentialRepository.js";
 import type { OrganizationRepository } from "../repositories/organizationRepository.js";
 import type { CandidateRepository } from "../repositories/candidateRepository.js";
-import type { AuditRepository } from "../repositories/auditRepository.js";
+import type { AuditRepository, AuditLog } from "../repositories/auditRepository.js";
 import { badRequest, notFound } from "../errors/apiError.js";
 import type { JsonObject, CanonicalCredential, CredentialStatus } from "../domain/credentials/types.js";
 import { hashCanonicalCredential } from "../domain/credentials/canonicalCredential.js";
@@ -394,5 +394,76 @@ export class CredentialService {
     }
 
     return updated;
+  }
+
+  async getStats(organizationId?: string): Promise<{
+    totalCandidates: number;
+    totalCredentials: number;
+    issuedCredentials: number;
+    draftCredentials: number;
+    revokedCredentials: number;
+    verifiedCredentials: number;
+  }> {
+    const candidateFilter = organizationId ? { organizationId } : {};
+    const credentialFilter = organizationId ? { organizationId } : {};
+
+    const [candidates, credentials] = await Promise.all([
+      this.candidateRepo.list(candidateFilter),
+      this.repo.list(credentialFilter)
+    ]);
+
+    const totalCandidates = candidates.length;
+    const totalCredentials = credentials.length;
+    const issuedCredentials = credentials.filter((c) => c.status === "ISSUED").length;
+    const draftCredentials = credentials.filter((c) => c.status === "DRAFT" || c.status === "FINALIZED").length;
+    const revokedCredentials = credentials.filter((c) => c.status === "REVOKED").length;
+    const verifiedCredentials = issuedCredentials;
+
+    return {
+      totalCandidates,
+      totalCredentials,
+      issuedCredentials,
+      draftCredentials,
+      revokedCredentials,
+      verifiedCredentials
+    };
+  }
+
+  async getAuditLogs(filters: { organizationId?: string; credentialId?: string; candidateId?: string } = {}): Promise<AuditLog[]> {
+    if (filters.credentialId) {
+      return this.auditRepo.listByCredential(filters.credentialId);
+    }
+    if (filters.candidateId) {
+      return this.auditRepo.listByCandidate(filters.candidateId);
+    }
+    if (filters.organizationId) {
+      return this.auditRepo.listByOrganization(filters.organizationId);
+    }
+
+    const result = await this.pool.query<{
+      id: string;
+      organization_id: string | null;
+      actor_user_id: string | null;
+      entity_type: string;
+      entity_id: string | null;
+      event_type: string;
+      event_metadata: JsonObject;
+      ip_hash: string | null;
+      created_at: Date;
+    }>(
+      "SELECT id, organization_id, actor_user_id, entity_type, entity_id, event_type, event_metadata, ip_hash, created_at FROM audit_logs ORDER BY created_at DESC LIMIT 50"
+    );
+
+    return result.rows.map((row) => ({
+      id: row.id,
+      organizationId: row.organization_id,
+      actorUserId: row.actor_user_id,
+      entityType: row.entity_type,
+      entityId: row.entity_id,
+      eventType: row.event_type,
+      eventMetadata: row.event_metadata,
+      ipHash: row.ip_hash,
+      createdAt: row.created_at.toISOString()
+    }));
   }
 }

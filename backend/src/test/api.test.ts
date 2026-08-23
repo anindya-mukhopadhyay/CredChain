@@ -348,5 +348,79 @@ describe("CredChain REST API Integration", () => {
       });
       expect(JSON.parse(verifyRes.payload).status).toBe("REVOKED");
     });
+
+    it("lists organizations, candidates, credentials, dashboard stats, and audit logs", async () => {
+      // Create org
+      const orgRes = await app.inject({
+        method: "POST",
+        url: "/api/v1/organizations",
+        payload: { name: "Stats Org", type: "UNIVERSITY" }
+      });
+      const org = JSON.parse(orgRes.payload);
+
+      // Create candidate
+      const candRes = await app.inject({
+        method: "POST",
+        url: "/api/v1/candidates",
+        payload: {
+          organizationId: org.id,
+          name: "Alice Candidate",
+          candidateReference: "CAND-STATS-1"
+        }
+      });
+      const cand = JSON.parse(candRes.payload);
+
+      // Create draft credential
+      await app.inject({
+        method: "POST",
+        url: "/api/v1/credentials",
+        payload: {
+          organizationId: org.id,
+          candidateId: cand.id,
+          credentialType: "BTECH_SEMESTER_MARKSHEET",
+          payload: { semester: 1, result: "PASS" }
+        }
+      });
+
+      // 1. List organizations
+      const listOrgs = await app.inject({ method: "GET", url: "/api/v1/organizations" });
+      expect(listOrgs.statusCode).toBe(200);
+      expect(JSON.parse(listOrgs.payload).length).toBeGreaterThanOrEqual(1);
+
+      // 2. List candidates
+      const listCands = await app.inject({
+        method: "GET",
+        url: `/api/v1/candidates?organizationId=${org.id}`
+      });
+      expect(listCands.statusCode).toBe(200);
+      expect(JSON.parse(listCands.payload).length).toBe(1);
+
+      // 3. List credentials
+      const listCreds = await app.inject({
+        method: "GET",
+        url: `/api/v1/credentials?organizationId=${org.id}`
+      });
+      expect(listCreds.statusCode).toBe(200);
+      expect(JSON.parse(listCreds.payload).length).toBe(1);
+
+      // 4. Get Dashboard Stats
+      const statsRes = await app.inject({
+        method: "GET",
+        url: `/api/v1/dashboard/stats?organizationId=${org.id}`
+      });
+      expect(statsRes.statusCode).toBe(200);
+      const stats = JSON.parse(statsRes.payload);
+      expect(stats.totalCandidates).toBe(1);
+      expect(stats.totalCredentials).toBe(1);
+      expect(stats.draftCredentials).toBe(1);
+
+      // 5. Get Audit Logs
+      const auditRes = await app.inject({
+        method: "GET",
+        url: `/api/v1/audit-logs?organizationId=${org.id}`
+      });
+      expect(auditRes.statusCode).toBe(200);
+      expect(JSON.parse(auditRes.payload).length).toBeGreaterThanOrEqual(1);
+    });
   });
 });
