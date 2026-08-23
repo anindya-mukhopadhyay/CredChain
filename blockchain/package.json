@@ -1,0 +1,22 @@
+{
+  "name": "@credchain/blockchain",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "hardhat compile",
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "typecheck": "hardhat compile && tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "node": "hardhat node",
+    "deploy:local": "hardhat run scripts/deploy.ts --network localhost"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^5.0.2"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "hardhat": "^2.22.10",
+    "typescript": "^5.5.4"
+  }
+}

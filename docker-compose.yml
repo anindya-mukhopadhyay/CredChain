@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: credchain-postgres
+    environment:
+      POSTGRES_DB: credchain
+      POSTGRES_USER: credchain
+      POSTGRES_PASSWORD: credchain
+    ports:
+      - "5432:5432"
+    volumes:
+      - credchain-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U credchain -d credchain"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  credchain-postgres-data:
+
