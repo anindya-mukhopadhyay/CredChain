@@ -19,6 +19,7 @@ const envSchema = z.object({
   CHAIN_ID: z.coerce.number().int().positive().default(31337),
   CREDENTIAL_REGISTRY_ADDRESS: z.string().optional(),
   DEPLOYER_PRIVATE_KEY: z.string().optional(),
+  ENABLE_DEMO_SEED: z.string().optional().transform((val) => val === "true"),
   DOCUMENT_STORAGE_ROOT: z.string().default("./storage")
 });
 

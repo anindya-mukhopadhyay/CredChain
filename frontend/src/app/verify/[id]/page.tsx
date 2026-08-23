@@ -20,6 +20,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/com
 import { Button } from "@/components/ui/Button";
 import { Spinner } from "@/components/ui/Spinner";
 import { formatDate } from "@/lib/utils";
+import { CredentialShareModal } from "@/components/credentials/CredentialShareModal";
 import {
   CheckCircle2,
   AlertTriangle,
@@ -28,6 +29,7 @@ import {
   ArrowLeft,
   ShieldAlert,
   Clock,
+  Share2,
 } from "lucide-react";
 
 export default function VerifyResultPage() {
@@ -40,6 +42,7 @@ export default function VerifyResultPage() {
   const [organization, setOrganization] = useState<Organization | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isShareOpen, setIsShareOpen] = useState(false);
 
   const runVerification = async () => {
     if (!id) return;
@@ -105,16 +108,22 @@ export default function VerifyResultPage() {
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
-      {/* Back button */}
+      {/* Back button and Header actions */}
       <div className="flex items-center justify-between">
         <Link href="/verify">
           <Button variant="ghost" size="sm" className="gap-1.5 text-slate-600">
             <ArrowLeft className="w-4 h-4" /> Verify another
           </Button>
         </Link>
-        <Button variant="outline" size="sm" onClick={runVerification} className="text-xs">
-          Re-verify proof
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => setIsShareOpen(true)} className="text-xs gap-1 text-indigo-600 border-indigo-200 hover:bg-indigo-50">
+            <Share2 className="w-3.5 h-3.5" />
+            Share / QR
+          </Button>
+          <Button variant="outline" size="sm" onClick={runVerification} className="text-xs">
+            Re-verify proof
+          </Button>
+        </div>
       </div>
 
       {/* Prominent Verification Result Banners */}
@@ -524,6 +533,18 @@ export default function VerifyResultPage() {
           </div>
         </CardContent>
       </Card>
+
+      <CredentialShareModal
+        isOpen={isShareOpen}
+        onClose={() => setIsShareOpen(false)}
+        credentialId={id}
+        credentialNumber={credential?.credentialNumber || id.slice(0, 8)}
+        credentialTitle={
+          verifyResult.degreeDetails
+            ? `${verifyResult.degreeDetails.degreeTitle} (Degree Verification)`
+            : `Credential ${credential?.credentialNumber || id.slice(0, 8)}`
+        }
+      />
     </div>
   );
 }

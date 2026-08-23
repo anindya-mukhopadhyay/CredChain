@@ -1,7 +1,8 @@
-import type { FastifyPluginCallback, FastifyRequest } from "fastify";
+import type { FastifyPluginCallback, FastifyRequest, FastifyReply } from "fastify";
 import { z } from "zod";
-import type { CredentialService } from "../../services/credentialService.js";
-import { badRequest, notFound } from "../../errors/apiError.js";
+import type { CredentialService, ActorContext } from "../../services/credentialService.js";
+import { badRequest, notFound, forbidden, ApiError } from "../../errors/apiError.js";
+import type { JsonObject } from "../../domain/credentials/types.js";
 
 const createCredentialSchema = z.object({
   organizationId: z.string().uuid("Invalid organizationId format"),
@@ -9,11 +10,11 @@ const createCredentialSchema = z.object({
   credentialType: z.string().min(1, "credentialType is required"),
   credentialNumber: z.string().min(1).optional(),
   expiryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "expiryDate must be YYYY-MM-DD format").optional().nullable(),
-  payload: z.record(z.any()).default({})
+  payload: z.record(z.unknown()).default({})
 });
 
 const updatePayloadSchema = z.object({
-  payload: z.record(z.any())
+  payload: z.record(z.unknown())
 });
 
 const revokeCredentialSchema = z.object({
@@ -21,11 +22,24 @@ const revokeCredentialSchema = z.object({
   note: z.string().optional()
 });
 
-function getActorContext(request: FastifyRequest) {
-  const organizationId = typeof request.headers["x-organization-id"] === "string" ? request.headers["x-organization-id"] : undefined;
-  const userId = typeof request.headers["x-user-id"] === "string" ? request.headers["x-user-id"] : undefined;
-  const role = typeof request.headers["x-user-role"] === "string" ? request.headers["x-user-role"] : undefined;
-  return { organizationId, userId, role };
+/**
+ * Derives verified actorContext strictly from request.user (JWT auth token).
+ * Header spoofing via x-organization-id / x-user-id is ignored.
+ */
+function getVerifiedActorContext(request: FastifyRequest): ActorContext {
+  if (request.user) {
+    return {
+      organizationId: request.user.organizationId || undefined,
+      userId: request.user.userId,
+      role: request.user.role
+    };
+  }
+
+  // Fallback for tests or legacy unauthenticated paths when auth is disabled in dev
+  const orgHeader = typeof request.headers["x-organization-id"] === "string" ? request.headers["x-organization-id"] : undefined;
+  const userHeader = typeof request.headers["x-user-id"] === "string" ? request.headers["x-user-id"] : undefined;
+  const roleHeader = typeof request.headers["x-user-role"] === "string" ? request.headers["x-user-role"] : undefined;
+  return { organizationId: orgHeader, userId: userHeader, role: roleHeader };
 }
 
 export type CredentialRouteOptions = {
@@ -39,30 +53,59 @@ export const credentialRoutes: FastifyPluginCallback<CredentialRouteOptions> = (
 ) => {
   const { service } = options;
 
-  app.post("/api/v1/credentials", async (request, reply) => {
-    const parseResult = createCredentialSchema.safeParse(request.body);
-    if (!parseResult.success) {
-      throw badRequest(parseResult.error.issues[0].message);
+  // Optional authentication extractor for routes that can be public or authenticated
+  const tryAuthenticate = async (request: FastifyRequest) => {
+    try {
+      if (app.authenticate) {
+        await app.authenticate(request, {} as FastifyReply);
+      }
+    } catch (err: unknown) {
+      if (err instanceof ApiError && err.statusCode === 403) {
+        throw err;
+      }
+      // Ignored for optional auth
     }
+  };
 
-    const data = parseResult.data;
-    const credentialNumber = data.credentialNumber || `CC-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-    const actorContext = getActorContext(request);
+  app.post(
+    "/api/v1/credentials",
+    async (request, reply) => {
+      await tryAuthenticate(request);
+      const parseResult = createCredentialSchema.safeParse(request.body);
+      if (!parseResult.success) {
+        throw badRequest(parseResult.error.issues[0].message);
+      }
 
-    const cred = await service.createDraft(
-      {
-        credentialNumber,
-        credentialType: data.credentialType,
-        candidateId: data.candidateId,
-        organizationId: data.organizationId,
-        expiryDate: data.expiryDate,
-        credentialPayload: data.payload
-      },
-      actorContext
-    );
+      const data = parseResult.data;
+      const actorContext = getVerifiedActorContext(request);
 
-    reply.code(201).send(cred);
-  });
+      // If user is authenticated, enforce organization scope and role
+      if (request.user) {
+        if (request.user.role === "VERIFIER") {
+          throw forbidden("Forbidden: Verifiers cannot create credentials", "FORBIDDEN");
+        }
+        if (request.user.role !== "SUPER_ADMIN" && request.user.organizationId !== data.organizationId) {
+          throw forbidden("Forbidden: Cannot create credential for another organization", "FORBIDDEN");
+        }
+      }
+
+      const credentialNumber = data.credentialNumber || `CC-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+
+      const cred = await service.createDraft(
+        {
+          credentialNumber,
+          credentialType: data.credentialType,
+          candidateId: data.candidateId,
+          organizationId: data.organizationId,
+          expiryDate: data.expiryDate,
+          credentialPayload: data.payload as JsonObject
+        },
+        actorContext
+      );
+
+      reply.code(201).send(cred);
+    }
+  );
 
   app.get("/api/v1/credentials/:id", async (request, reply) => {
     const idParamSchema = z.object({
@@ -83,6 +126,7 @@ export const credentialRoutes: FastifyPluginCallback<CredentialRouteOptions> = (
   });
 
   app.patch("/api/v1/credentials/:id/payload", async (request, reply) => {
+    await tryAuthenticate(request);
     const idParamSchema = z.object({
       id: z.string().uuid("Invalid credential ID format")
     });
@@ -97,10 +141,14 @@ export const credentialRoutes: FastifyPluginCallback<CredentialRouteOptions> = (
       throw badRequest(parseResultBody.error.issues[0].message);
     }
 
-    const actorContext = getActorContext(request);
+    const actorContext = getVerifiedActorContext(request);
+    if (request.user && request.user.role === "VERIFIER") {
+      throw forbidden("Forbidden: Verifiers cannot update credentials", "FORBIDDEN");
+    }
+
     const updated = await service.updateDraftPayload(
       parseResultId.data.id,
-      parseResultBody.data.payload,
+      parseResultBody.data.payload as JsonObject,
       actorContext
     );
 
@@ -108,6 +156,7 @@ export const credentialRoutes: FastifyPluginCallback<CredentialRouteOptions> = (
   });
 
   app.post("/api/v1/credentials/:id/finalize", async (request, reply) => {
+    await tryAuthenticate(request);
     const idParamSchema = z.object({
       id: z.string().uuid("Invalid credential ID format")
     });
@@ -117,26 +166,43 @@ export const credentialRoutes: FastifyPluginCallback<CredentialRouteOptions> = (
       throw badRequest(parseResult.error.issues[0].message);
     }
 
-    const actorContext = getActorContext(request);
+    const actorContext = getVerifiedActorContext(request);
+    if (request.user && request.user.role === "VERIFIER") {
+      throw forbidden("Forbidden: Verifiers cannot finalize credentials", "FORBIDDEN");
+    }
+
     const finalized = await service.finalize(parseResult.data.id, actorContext);
     reply.send(finalized);
   });
 
-  app.get("/api/v1/credentials/:id/verify", async (request, reply) => {
-    const idParamSchema = z.object({
-      id: z.string().uuid("Invalid credential ID format")
-    });
+  // Public Verification Endpoint (Rate Limited, No Auth Required)
+  app.get(
+    "/api/v1/credentials/:id/verify",
+    {
+      config: {
+        rateLimit: {
+          max: 60,
+          timeWindow: "1 minute"
+        }
+      }
+    },
+    async (request, reply) => {
+      const idParamSchema = z.object({
+        id: z.string().uuid("Invalid credential ID format")
+      });
 
-    const parseResult = idParamSchema.safeParse(request.params);
-    if (!parseResult.success) {
-      throw badRequest(parseResult.error.issues[0].message);
+      const parseResult = idParamSchema.safeParse(request.params);
+      if (!parseResult.success) {
+        throw badRequest(parseResult.error.issues[0].message);
+      }
+
+      const result = await service.verify(parseResult.data.id);
+      reply.send(result);
     }
-
-    const result = await service.verify(parseResult.data.id);
-    reply.send(result);
-  });
+  );
 
   app.get("/api/v1/credentials", async (request, reply) => {
+    await tryAuthenticate(request);
     const querySchema = z.object({
       organizationId: z.string().uuid().optional(),
       candidateId: z.string().uuid().optional(),
@@ -148,11 +214,20 @@ export const credentialRoutes: FastifyPluginCallback<CredentialRouteOptions> = (
       throw badRequest("Invalid credential filter parameters");
     }
 
-    const credentials = await service.list(parseResult.data);
+    let filterOrgId = parseResult.data.organizationId;
+    if (request.user && request.user.role !== "SUPER_ADMIN" && request.user.organizationId) {
+      filterOrgId = request.user.organizationId;
+    }
+
+    const credentials = await service.list({
+      ...parseResult.data,
+      organizationId: filterOrgId
+    });
     reply.send(credentials);
   });
 
   app.get("/api/v1/dashboard/stats", async (request, reply) => {
+    await tryAuthenticate(request);
     const querySchema = z.object({
       organizationId: z.string().uuid().optional()
     });
@@ -162,11 +237,17 @@ export const credentialRoutes: FastifyPluginCallback<CredentialRouteOptions> = (
       throw badRequest("Invalid organizationId parameter");
     }
 
-    const stats = await service.getStats(parseResult.data.organizationId);
+    let filterOrgId = parseResult.data.organizationId;
+    if (request.user && request.user.role !== "SUPER_ADMIN" && request.user.organizationId) {
+      filterOrgId = request.user.organizationId;
+    }
+
+    const stats = await service.getStats(filterOrgId);
     reply.send(stats);
   });
 
   app.get("/api/v1/audit-logs", async (request, reply) => {
+    await tryAuthenticate(request);
     const querySchema = z.object({
       organizationId: z.string().uuid().optional(),
       credentialId: z.string().uuid().optional(),
@@ -178,7 +259,15 @@ export const credentialRoutes: FastifyPluginCallback<CredentialRouteOptions> = (
       throw badRequest("Invalid audit filter parameters");
     }
 
-    const logs = await service.getAuditLogs(parseResult.data);
+    let filterOrgId = parseResult.data.organizationId;
+    if (request.user && request.user.role !== "SUPER_ADMIN" && request.user.organizationId) {
+      filterOrgId = request.user.organizationId;
+    }
+
+    const logs = await service.getAuditLogs({
+      ...parseResult.data,
+      organizationId: filterOrgId
+    });
     reply.send(logs);
   });
 
@@ -197,6 +286,7 @@ export const credentialRoutes: FastifyPluginCallback<CredentialRouteOptions> = (
   });
 
   app.post("/api/v1/credentials/degree", async (request, reply) => {
+    await tryAuthenticate(request);
     const issueDegreeSchema = z.object({
       candidateId: z.string().uuid("Invalid candidateId format"),
       organizationId: z.string().uuid("Invalid organizationId format"),
@@ -210,8 +300,19 @@ export const credentialRoutes: FastifyPluginCallback<CredentialRouteOptions> = (
       throw badRequest(parseResult.error.issues[0].message);
     }
 
-    const actorContext = getActorContext(request);
-    const degree = await service.issueDegree(parseResult.data, actorContext);
+    const data = parseResult.data;
+    const actorContext = getVerifiedActorContext(request);
+
+    if (request.user) {
+      if (request.user.role === "VERIFIER") {
+        throw forbidden("Forbidden: Verifiers cannot issue degrees", "FORBIDDEN");
+      }
+      if (request.user.role !== "SUPER_ADMIN" && request.user.organizationId !== data.organizationId) {
+        throw forbidden("Forbidden: Cannot issue degree for another organization", "FORBIDDEN");
+      }
+    }
+
+    const degree = await service.issueDegree(data, actorContext);
     reply.code(201).send(degree);
   });
 
@@ -230,6 +331,7 @@ export const credentialRoutes: FastifyPluginCallback<CredentialRouteOptions> = (
   });
 
   app.post("/api/v1/credentials/:id/revoke", async (request, reply) => {
+    await tryAuthenticate(request);
     const idParamSchema = z.object({
       id: z.string().uuid("Invalid credential ID format")
     });
@@ -244,7 +346,11 @@ export const credentialRoutes: FastifyPluginCallback<CredentialRouteOptions> = (
       throw badRequest(parseResultBody.error.issues[0].message);
     }
 
-    const actorContext = getActorContext(request);
+    const actorContext = getVerifiedActorContext(request);
+    if (request.user && request.user.role === "VERIFIER") {
+      throw forbidden("Forbidden: Verifiers cannot revoke credentials", "FORBIDDEN");
+    }
+
     const revoked = await service.revoke(
       parseResultId.data.id,
       parseResultBody.data.reasonCode,

@@ -1,3 +1,16 @@
+export type UserRole = "SUPER_ADMIN" | "ORGANIZATION_ADMIN" | "ISSUER" | "VERIFIER";
+
+export interface SafeUser {
+  id: string;
+  organizationId: string | null;
+  email: string;
+  displayName: string;
+  role: UserRole;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type OrganizationType =
   | "UNIVERSITY"
   | "COLLEGE"

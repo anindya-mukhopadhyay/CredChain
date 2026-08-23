@@ -10,7 +10,7 @@ import {
   getCandidate,
   listOrganizations,
 } from "@/lib/api";
-import type { Credential, Candidate, Organization, SemesterPayload } from "@/types";
+import type { Credential, Candidate, Organization, SemesterPayload, BTechDegreePayload } from "@/types";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { StatusBadge } from "@/components/credentials/StatusBadge";
@@ -19,14 +19,16 @@ import { BlockchainProofCard } from "@/components/credentials/BlockchainProofCar
 import { RelationshipVisualizer } from "@/components/credentials/RelationshipVisualizer";
 import { FinalizeDialog } from "@/components/credentials/FinalizeDialog";
 import { RevokeDialog } from "@/components/credentials/RevokeDialog";
+import { CredentialQRCode } from "@/components/credentials/CredentialQRCode";
+import { CredentialShareModal } from "@/components/credentials/CredentialShareModal";
 import { Spinner } from "@/components/ui/Spinner";
 import { formatDate } from "@/lib/utils";
 import {
   ShieldCheck,
-  ShieldAlert,
   ArrowLeft,
   AlertTriangle,
   Lock,
+  Share2,
 } from "lucide-react";
 
 export default function CredentialDetailPage() {
@@ -42,6 +44,7 @@ export default function CredentialDetailPage() {
   // Dialogs
   const [isFinalizeOpen, setIsFinalizeOpen] = useState(false);
   const [isRevokeOpen, setIsRevokeOpen] = useState(false);
+  const [isShareOpen, setIsShareOpen] = useState(false);
 
   const loadData = async () => {
     if (!id) return;
@@ -51,15 +54,26 @@ export default function CredentialDetailPage() {
       const cred = await getCredential(id);
       setCredential(cred);
 
-      const [cand, orgs] = await Promise.all([
-        getCandidate(cred.candidateId),
-        listOrganizations(),
-      ]);
-      setCandidate(cand);
-      setOrganization(orgs.find((o) => o.id === cred.organizationId) || null);
+      if (cred.candidateId) {
+        try {
+          const cand = await getCandidate(cred.candidateId);
+          setCandidate(cand);
+        } catch {
+          // Candidate might be restricted
+        }
+      }
+
+      if (cred.organizationId) {
+        try {
+          const orgs = await listOrganizations();
+          const org = orgs.find((o) => o.id === cred.organizationId);
+          if (org) setOrganization(org);
+        } catch {
+          // Organization might be restricted
+        }
+      }
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Failed to load credential details";
-      setError(message);
+      setError((err as Error).message || "Failed to load credential details");
     } finally {
       setIsLoading(false);
     }
@@ -70,43 +84,60 @@ export default function CredentialDetailPage() {
   }, [id]);
 
   const handleFinalize = async () => {
-    if (!id) return;
-    await finalizeCredential(id);
-    await loadData();
+    if (!credential) return;
+    try {
+      await finalizeCredential(credential.id);
+      setIsFinalizeOpen(false);
+      await loadData();
+    } catch (err: unknown) {
+      alert((err as Error).message || "Failed to finalize credential");
+    }
   };
 
-  const handleRevoke = async (reasonCode: string, note?: string) => {
-    if (!id) return;
-    await revokeCredential(id, { reasonCode, note });
-    await loadData();
+  const handleRevoke = async (reasonCode: string, reasonNote?: string) => {
+    if (!credential) return;
+    try {
+      await revokeCredential(credential.id, { reasonCode, note: reasonNote });
+      setIsRevokeOpen(false);
+      await loadData();
+    } catch (err: unknown) {
+      alert((err as Error).message || "Failed to revoke credential");
+    }
   };
 
   if (isLoading) {
     return (
-      <div className="h-96 flex flex-col items-center justify-center gap-3 text-slate-400">
-        <Spinner size="lg" className="text-sky-600" />
-        <p className="text-sm font-medium">Loading credential & verification proof...</p>
+      <div className="flex flex-col items-center justify-center min-h-[50vh] gap-3">
+        <Spinner size="lg" />
+        <p className="text-sm text-slate-500">Loading credential details...</p>
       </div>
     );
   }
 
   if (error || !credential) {
     return (
-      <div className="max-w-2xl mx-auto p-6 bg-rose-50 border border-rose-200 rounded-2xl text-rose-900 space-y-3">
-        <h3 className="font-semibold">Credential Not Found</h3>
-        <p className="text-sm">{error || "The requested credential record could not be found."}</p>
+      <div className="space-y-4">
         <Link href="/credentials">
-          <Button variant="outline" size="sm">
+          <Button variant="ghost" size="sm" className="gap-2">
+            <ArrowLeft className="w-4 h-4" />
             Back to Credentials
           </Button>
         </Link>
+        <Card className="border-rose-200 bg-rose-50/50">
+          <CardContent className="pt-6">
+            <div className="flex items-center gap-3 text-rose-700">
+              <AlertTriangle className="w-5 h-5 shrink-0" />
+              <p className="text-sm font-medium">{error || "Credential not found"}</p>
+            </div>
+          </CardContent>
+        </Card>
       </div>
     );
   }
 
-  const isDegree = credential.credentialType === "BTECH_DEGREE";
-  const degreePayload = credential.credentialPayload as unknown as import("@/types").BTechDegreePayload;
   const payload = (credential.credentialPayload || {}) as SemesterPayload;
+  const isDegree = credential.credentialType === "BTECH_DEGREE";
+  const degreePayload = (credential.credentialPayload || {}) as unknown as Partial<BTechDegreePayload>;
   const semNumber = payload.semester ?? 1;
   const subjects = (Array.isArray(payload.subjects) ? payload.subjects : []) as import("@/types").SubjectItem[];
 
@@ -134,7 +165,18 @@ export default function CredentialDetailPage() {
         </div>
 
         {/* Action Buttons depending on status */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          {credential.status !== "DRAFT" && (
+            <Button
+              variant="outline"
+              onClick={() => setIsShareOpen(true)}
+              className="gap-1.5 border-indigo-200 text-indigo-700 hover:bg-indigo-50"
+            >
+              <Share2 className="w-4 h-4" />
+              Share Credential
+            </Button>
+          )}
+
           {credential.status === "DRAFT" && (
             <Button onClick={() => setIsFinalizeOpen(true)} className="gap-1.5 bg-emerald-600 hover:bg-emerald-700">
               <Lock className="w-4 h-4" />
@@ -164,37 +206,25 @@ export default function CredentialDetailPage() {
         </div>
       </div>
 
-      {/* Revocation Alert Banner if REVOKED */}
-      {credential.status === "REVOKED" && (
-        <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl flex items-center gap-3 text-rose-900">
-          <ShieldAlert className="w-5 h-5 text-rose-600 shrink-0" />
-          <div className="text-xs">
-            <span className="font-bold block">This Credential Has Been Revoked</span>
-            <p className="text-rose-700 mt-0.5">
-              This credential was officially invalidated by the issuing authority and is recorded as inactive on-chain.
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* Main Grid: Left = Details & Academic Payload; Right = Timeline & Blockchain Proof */}
+      {/* Main Grid: 2 Cols Left, 1 Col Right */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left Column (2 Cols) */}
         <div className="lg:col-span-2 space-y-6">
           {/* Metadata Card */}
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Metadata & Parties</CardTitle>
+              <CardTitle className="text-base">Credential & Candidate Details</CardTitle>
+              <CardDescription>Academic identity and program metadata</CardDescription>
             </CardHeader>
             <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
               <div>
-                <span className="text-slate-500 block">Candidate Recipient</span>
+                <span className="text-slate-500 block">Candidate Full Name</span>
                 <span className="font-semibold text-slate-900 mt-1 block">
-                  {candidate ? `${candidate.givenName} ${candidate.familyName}` : credential.candidateId}
+                  {candidate ? `${candidate.givenName} ${candidate.familyName}` : "—"}
                 </span>
                 {candidate?.externalReference && (
                   <span className="text-slate-400 font-mono text-[11px] block mt-0.5">
-                    Ref: {candidate.externalReference}
+                    Roll No: {candidate.externalReference}
                   </span>
                 )}
               </div>
@@ -279,41 +309,31 @@ export default function CredentialDetailPage() {
                       {degreePayload.totalCreditsEarned || 0}
                     </div>
                   </div>
-                  <div className="bg-white p-4 rounded-xl border border-slate-200">
-                    <div className="text-slate-500 text-xs">Total Semesters</div>
-                    <div className="text-2xl font-bold text-slate-900 mt-1">
-                      8 / 8 Completed
-                    </div>
+                  <div className="bg-white p-4 rounded-xl border border-slate-200 col-span-2 sm:col-span-1">
+                    <div className="text-slate-500 text-xs">Semesters Completed</div>
+                    <div className="text-2xl font-bold text-emerald-600 mt-1">8 / 8</div>
                   </div>
                 </div>
 
-                <div>
-                  <div className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-3">
-                    Anchored 8-Semester Progression DAG Chain
+                <div className="p-4 bg-indigo-50/50 rounded-xl border border-indigo-100 text-xs text-indigo-900 space-y-1">
+                  <div className="font-semibold">Cryptographic Commitment Hash (DAG Root):</div>
+                  <div className="font-mono text-[11px] text-indigo-700 break-all select-all">
+                    {credential.canonicalHash || "Pending finalization"}
                   </div>
-                  <RelationshipVisualizer
-                    degreeCredentialId={credential.id}
-                    degreeStatus={credential.status}
-                    degreeTitle={degreePayload.degreeTitle || "B.Tech Degree"}
-                    cgpa={Number(degreePayload.cumulativeGpa)}
-                  />
                 </div>
               </CardContent>
             </Card>
           ) : (
-            /* Academic Marksheet / Subjects Table */
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between">
-                <div>
-                  <CardTitle className="text-base">Marksheet Statement of Marks</CardTitle>
-                  <CardDescription>
-                    Semester {semNumber} course components and grades
-                  </CardDescription>
-                </div>
-                <div className="text-right">
-                  <span className="text-xs font-semibold text-slate-500 block">Result Status</span>
+            /* Marksheet Subject Breakdown Card */
+            <Card className="overflow-hidden">
+              <CardHeader className="bg-slate-50/50 border-b border-slate-200">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="text-sm">Semester {semNumber} Marksheet & Grades</CardTitle>
+                    <CardDescription>Verified academic performance for Semester {semNumber}</CardDescription>
+                  </div>
                   <span
-                    className={`text-xs font-bold px-2 py-0.5 rounded ${
+                    className={`px-2.5 py-1 rounded-full text-xs font-bold ${
                       payload.result === "PASS"
                         ? "bg-emerald-100 text-emerald-800"
                         : "bg-rose-100 text-rose-800"
@@ -381,6 +401,13 @@ export default function CredentialDetailPage() {
 
         {/* Right Column (1 Col) */}
         <div className="space-y-6">
+          {/* Public QR Code Verification Card */}
+          <CredentialQRCode
+            credentialId={credential.id}
+            credentialNumber={credential.credentialNumber}
+            status={credential.status}
+          />
+
           {/* Blockchain Proof Card */}
           <BlockchainProofCard credential={credential} />
 
@@ -388,7 +415,7 @@ export default function CredentialDetailPage() {
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Lifecycle Timeline</CardTitle>
-              <CardDescription>Immutable record of state transitions</CardDescription>
+              <CardDescription>Audit timestamps and status lifecycle</CardDescription>
             </CardHeader>
             <CardContent>
               <CredentialTimeline credential={credential} />
@@ -397,7 +424,20 @@ export default function CredentialDetailPage() {
         </div>
       </div>
 
-      {/* Confirmation Modals */}
+      {/* Share Modal */}
+      <CredentialShareModal
+        isOpen={isShareOpen}
+        onClose={() => setIsShareOpen(false)}
+        credentialId={credential.id}
+        credentialNumber={credential.credentialNumber}
+        credentialTitle={
+          isDegree
+            ? `${degreePayload.degreeTitle || "B.Tech Degree"} (${candidate?.givenName || "Student"})`
+            : `Semester ${semNumber} Marksheet (${candidate?.givenName || "Student"})`
+        }
+      />
+
+      {/* Finalize Dialog */}
       <FinalizeDialog
         isOpen={isFinalizeOpen}
         onClose={() => setIsFinalizeOpen(false)}
@@ -405,6 +445,7 @@ export default function CredentialDetailPage() {
         credentialNumber={credential.credentialNumber}
       />
 
+      {/* Revoke Dialog */}
       <RevokeDialog
         isOpen={isRevokeOpen}
         onClose={() => setIsRevokeOpen(false)}

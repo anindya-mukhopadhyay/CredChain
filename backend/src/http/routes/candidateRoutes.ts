@@ -1,7 +1,8 @@
-import type { FastifyPluginCallback } from "fastify";
+import type { FastifyPluginCallback, FastifyRequest, FastifyReply } from "fastify";
 import { z } from "zod";
 import type { CandidateService } from "../../services/candidateService.js";
-import { badRequest, notFound } from "../../errors/apiError.js";
+import { badRequest, notFound, forbidden, ApiError } from "../../errors/apiError.js";
+import type { JsonObject } from "../../domain/credentials/types.js";
 
 const createCandidateSchema = z.object({
   organizationId: z.string().uuid("Invalid organizationId format"),
@@ -10,7 +11,7 @@ const createCandidateSchema = z.object({
   givenName: z.string().min(1, "Given name is required").optional(),
   familyName: z.string().min(1, "Family name is required").optional(),
   dateOfBirth: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "dateOfBirth must be YYYY-MM-DD format").optional().nullable(),
-  metadata: z.record(z.any()).optional()
+  metadata: z.record(z.unknown()).optional()
 });
 
 export type CandidateRouteOptions = {
@@ -24,7 +25,21 @@ export const candidateRoutes: FastifyPluginCallback<CandidateRouteOptions> = (
 ) => {
   const { service } = options;
 
+  const tryAuthenticate = async (request: FastifyRequest) => {
+    try {
+      if (app.authenticate) {
+        await app.authenticate(request, {} as FastifyReply);
+      }
+    } catch (err: unknown) {
+      if (err instanceof ApiError && err.statusCode === 403) {
+        throw err;
+      }
+      // Ignored for optional auth
+    }
+  };
+
   app.post("/api/v1/candidates", async (request, reply) => {
+    await tryAuthenticate(request);
     const parseResult = createCandidateSchema.safeParse(request.body);
     if (!parseResult.success) {
       const issue = parseResult.error.issues[0];
@@ -32,6 +47,15 @@ export const candidateRoutes: FastifyPluginCallback<CandidateRouteOptions> = (
     }
 
     const { organizationId, candidateReference, name, givenName, familyName, dateOfBirth, metadata } = parseResult.data;
+
+    if (request.user) {
+      if (request.user.role === "VERIFIER") {
+        throw forbidden("Forbidden: Verifiers cannot register candidates", "FORBIDDEN");
+      }
+      if (request.user.role !== "SUPER_ADMIN" && request.user.organizationId !== organizationId) {
+        throw forbidden("Forbidden: Cannot create candidate for another organization", "FORBIDDEN");
+      }
+    }
 
     let finalGivenName = givenName || "";
     let finalFamilyName = familyName || "";
@@ -52,13 +76,14 @@ export const candidateRoutes: FastifyPluginCallback<CandidateRouteOptions> = (
       givenName: finalGivenName,
       familyName: finalFamilyName,
       dateOfBirth,
-      metadata
+      metadata: metadata as JsonObject | undefined
     });
 
     reply.code(201).send(candidate);
   });
 
   app.get("/api/v1/candidates", async (request, reply) => {
+    await tryAuthenticate(request);
     const querySchema = z.object({
       organizationId: z.string().uuid().optional()
     });
@@ -68,11 +93,17 @@ export const candidateRoutes: FastifyPluginCallback<CandidateRouteOptions> = (
       throw badRequest("Invalid organizationId filter");
     }
 
-    const candidates = await service.list(parseResult.data);
+    let filterOrgId = parseResult.data.organizationId;
+    if (request.user && request.user.role !== "SUPER_ADMIN" && request.user.organizationId) {
+      filterOrgId = request.user.organizationId;
+    }
+
+    const candidates = await service.list({ organizationId: filterOrgId });
     reply.send(candidates);
   });
 
   app.get("/api/v1/candidates/:id", async (request, reply) => {
+    await tryAuthenticate(request);
     const paramsSchema = z.object({
       id: z.string().uuid("Invalid candidate ID format")
     });
@@ -85,6 +116,12 @@ export const candidateRoutes: FastifyPluginCallback<CandidateRouteOptions> = (
     const candidate = await service.findById(parseResult.data.id);
     if (!candidate) {
       throw notFound("Candidate");
+    }
+
+    if (request.user && request.user.role !== "SUPER_ADMIN" && request.user.organizationId) {
+      if (candidate.organizationId !== request.user.organizationId) {
+        throw forbidden("Forbidden: Candidate belongs to another organization", "FORBIDDEN");
+      }
     }
 
     reply.send(candidate);

@@ -3,6 +3,7 @@
 import React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useAuth } from "@/context/AuthContext";
 import {
   LayoutDashboard,
   Building2,
@@ -11,6 +12,7 @@ import {
   ShieldCheck,
   Activity,
   PlusCircle,
+  UserCheck
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -21,14 +23,20 @@ interface SidebarProps {
 
 export function Sidebar({ isOpen, onClose }: SidebarProps) {
   const pathname = usePathname();
+  const { user, hasRole } = useAuth();
+
+  const isVerifier = user?.role === "VERIFIER";
 
   const navigation = [
-    { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-    { name: "Organizations", href: "/organizations", icon: Building2 },
-    { name: "Candidates", href: "/candidates", icon: Users },
-    { name: "Credentials", href: "/credentials", icon: Award },
-    { name: "Public Verification", href: "/verify", icon: ShieldCheck },
-    { name: "Audit Trail", href: "/audit", icon: Activity },
+    { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard, roles: ["ALL"] },
+    ...(!isVerifier ? [{ name: "Organizations", href: "/organizations", icon: Building2, roles: ["ALL"] }] : []),
+    ...(!isVerifier ? [{ name: "Candidates", href: "/candidates", icon: Users, roles: ["ALL"] }] : []),
+    ...(!isVerifier ? [{ name: "Credentials", href: "/credentials", icon: Award, roles: ["ALL"] }] : []),
+    ...(hasRole(["SUPER_ADMIN", "ORGANIZATION_ADMIN"])
+      ? [{ name: "Users & Roles", href: "/users", icon: UserCheck, roles: ["SUPER_ADMIN", "ORGANIZATION_ADMIN"] }]
+      : []),
+    { name: "Public Verification", href: "/verify", icon: ShieldCheck, roles: ["ALL"] },
+    ...(!isVerifier ? [{ name: "Audit Trail", href: "/audit", icon: Activity, roles: ["ALL"] }] : []),
   ];
 
   return (
@@ -56,7 +64,7 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
             <h1 className="font-bold text-white tracking-tight text-base flex items-center gap-1.5">
               CredChain
               <span className="text-[10px] px-1.5 py-0.2 rounded bg-sky-950 text-sky-400 border border-sky-800">
-                MVP
+                Phase 5
               </span>
             </h1>
             <p className="text-[10px] text-slate-400 font-medium">Trust every credential.</p>
@@ -64,16 +72,18 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
         </div>
 
         {/* Quick Action Button */}
-        <div className="px-4 pt-4 pb-2">
-          <Link
-            href="/credentials/new"
-            onClick={onClose}
-            className="w-full flex items-center justify-center gap-2 bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white text-xs font-semibold py-2 px-3 rounded-lg shadow-xs transition-colors"
-          >
-            <PlusCircle className="w-4 h-4" />
-            Issue Marksheet
-          </Link>
-        </div>
+        {!isVerifier && (
+          <div className="px-4 pt-4 pb-2">
+            <Link
+              href="/credentials/new"
+              onClick={onClose}
+              className="w-full flex items-center justify-center gap-2 bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white text-xs font-semibold py-2 px-3 rounded-lg shadow-xs transition-colors"
+            >
+              <PlusCircle className="w-4 h-4" />
+              Issue Marksheet
+            </Link>
+          </div>
+        )}
 
         {/* Navigation Items */}
         <nav className="flex-1 px-3 py-3 space-y-1 overflow-y-auto">
@@ -100,18 +110,19 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
           })}
         </nav>
 
-        {/* Footer info */}
-        <div className="p-4 border-t border-slate-800 bg-slate-950/20 text-[11px] text-slate-500">
-          <div className="flex items-center justify-between mb-1">
+        {/* User Role footer info */}
+        <div className="p-4 border-t border-slate-800 bg-slate-950/20 text-[11px] text-slate-400 space-y-1.5">
+          <div className="flex items-center justify-between">
+            <span>Role Context</span>
+            <span className="font-bold text-sky-400 font-mono text-[10px]">{user?.role || "GUEST"}</span>
+          </div>
+          <div className="flex items-center justify-between">
             <span>Blockchain Network</span>
             <span className="inline-flex items-center gap-1 text-emerald-400 font-medium">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
               Localhost 31337
             </span>
           </div>
-          <p className="truncate text-[10px] text-slate-500 font-mono">
-            Contract: 0x5FbD...0aa3
-          </p>
         </div>
       </aside>
     </>

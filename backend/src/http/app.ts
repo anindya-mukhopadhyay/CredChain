@@ -1,5 +1,7 @@
 import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
+import cookie from "@fastify/cookie";
+import rateLimit from "@fastify/rate-limit";
 import Fastify from "fastify";
 import type { FastifyInstance } from "fastify";
 import { verifyDatabaseConnection, type DatabaseClient, type TransactionalDatabase } from "../db/pool.js";
@@ -11,14 +13,20 @@ import { OrganizationRepository } from "../repositories/organizationRepository.j
 import { CandidateRepository } from "../repositories/candidateRepository.js";
 import { CredentialRepository } from "../repositories/credentialRepository.js";
 import { AuditRepository } from "../repositories/auditRepository.js";
+import { UserRepository } from "../repositories/userRepository.js";
 
 // Services
 import { OrganizationService } from "../services/organizationService.js";
 import { CandidateService } from "../services/candidateService.js";
 import { CredentialService } from "../services/credentialService.js";
+import { AuthService } from "../services/authService.js";
+import { UserService } from "../services/userService.js";
 import { BlockchainService } from "../services/blockchain/blockchainService.js";
 
-// Routes
+// Plugins & Routes
+import { authPlugin } from "./plugins/authPlugin.js";
+import { authRoutes } from "./routes/authRoutes.js";
+import { userRoutes } from "./routes/userRoutes.js";
 import { organizationRoutes } from "./routes/organizationRoutes.js";
 import { candidateRoutes } from "./routes/candidateRoutes.js";
 import { credentialRoutes } from "./routes/credentialRoutes.js";
@@ -34,11 +42,16 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   await app.register(helmet);
   await app.register(cors, {
-    origin: true
+    origin: true,
+    credentials: true
+  });
+  await app.register(cookie);
+  await app.register(rateLimit, {
+    global: false
   });
 
   // Global Error Handler
-  app.setErrorHandler((error: Error & { statusCode?: number; code?: string }, request, reply) => {
+  app.setErrorHandler((error: Error & { statusCode?: number; code?: string }, _request, reply) => {
     if (error instanceof ApiError) {
       reply.code(error.statusCode).send({
         error: error.code,
@@ -88,7 +101,10 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       "credential-management",
       "credential-chain",
       "verification-portal",
-      "audit-trail"
+      "audit-trail",
+      "authentication",
+      "rbac",
+      "qr-verification"
     ],
     privacyModel: "sensitive data remains off-chain; blockchain stores hashes and minimal metadata"
   }));
@@ -101,10 +117,22 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     const candidateRepo = new CandidateRepository(options.database);
     const credentialRepo = new CredentialRepository(options.database);
     const auditRepo = new AuditRepository(options.database);
+    const userRepo = new UserRepository(options.database);
 
     // Instantiate Services
     const orgService = new OrganizationService(orgRepo);
     const candidateService = new CandidateService(candidateRepo);
+    const authService = new AuthService(userRepo, orgRepo, auditRepo, env.JWT_SECRET);
+    const userService = new UserService(userRepo, auditRepo);
+
+    // Seed demo accounts only in non-production environments or when explicitly enabled
+    if (env.NODE_ENV !== "production" || env.ENABLE_DEMO_SEED) {
+      try {
+        await authService.seedDemoUsers();
+      } catch (seedErr) {
+        app.log.warn(`Demo user seeding note: ${(seedErr as Error).message}`);
+      }
+    }
 
     // Optional Blockchain Service
     let blockchainService: BlockchainService | undefined;
@@ -125,7 +153,12 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       blockchainService
     );
 
-    // Register routes
+    // Register Auth Plugin
+    await app.register(authPlugin, { authService });
+
+    // Register Routes
+    await app.register(authRoutes, { authService });
+    await app.register(userRoutes, { userService });
     await app.register(organizationRoutes, { service: orgService });
     await app.register(candidateRoutes, { service: candidateService });
     await app.register(credentialRoutes, { service: credentialService });

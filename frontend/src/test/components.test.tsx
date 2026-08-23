@@ -13,6 +13,7 @@ import { Alert } from "@/components/ui/Alert";
 import { RelationshipVisualizer } from "@/components/credentials/RelationshipVisualizer";
 import { DegreeEligibilityCard } from "@/components/credentials/DegreeEligibilityCard";
 import { CredentialTimeline } from "@/components/credentials/CredentialTimeline";
+import { CredentialQRCode } from "@/components/credentials/CredentialQRCode";
 import type { Credential, DegreeEligibilityResult } from "@/types";
 
 describe("Frontend UI Components", () => {
@@ -128,6 +129,35 @@ describe("Frontend UI Components", () => {
       expect(screen.getByText("Draft Created")).toBeInTheDocument();
       expect(screen.getByText("Canonical Hash Generated")).toBeInTheDocument();
       expect(screen.getByText("Blockchain Proof Registered")).toBeInTheDocument();
+    });
+  });
+
+  describe("CredentialQRCode", () => {
+    it("renders DRAFT status notice and does not generate public QR for draft credentials", () => {
+      render(
+        <CredentialQRCode
+          credentialId="draft-cred-123"
+          credentialNumber="CC-DRAFT-001"
+          status="DRAFT"
+        />
+      );
+      expect(screen.getByText("DRAFT")).toBeInTheDocument();
+      expect(screen.getByText(/Public verification QR codes are available only for finalized and issued credentials/)).toBeInTheDocument();
+    });
+
+    it("renders QR preview and action buttons for issued credentials", () => {
+      render(
+        <CredentialQRCode
+          credentialId="issued-cred-456"
+          credentialNumber="CC-ISSUED-001"
+          status="ISSUED"
+        />
+      );
+      expect(screen.getByText("Public QR Verification")).toBeInTheDocument();
+      expect(screen.getByText("Zero PII Encoded")).toBeInTheDocument();
+      expect(screen.getByText("Copy Link")).toBeInTheDocument();
+      expect(screen.getByText("Download QR")).toBeInTheDocument();
+      expect(screen.getByText("Verify Portal")).toBeInTheDocument();
     });
   });
 });
