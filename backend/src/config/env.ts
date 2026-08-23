@@ -1,5 +1,13 @@
-import "dotenv/config";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
+import { config } from "dotenv";
 import { z } from "zod";
+
+for (const envPath of [resolve(process.cwd(), ".env"), resolve(process.cwd(), "../.env")]) {
+  if (existsSync(envPath)) {
+    config({ path: envPath, override: false });
+  }
+}
 
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -10,6 +18,7 @@ const envSchema = z.object({
   RPC_URL: z.string().url().default("http://127.0.0.1:8545"),
   CHAIN_ID: z.coerce.number().int().positive().default(31337),
   CREDENTIAL_REGISTRY_ADDRESS: z.string().optional(),
+  DEPLOYER_PRIVATE_KEY: z.string().optional(),
   DOCUMENT_STORAGE_ROOT: z.string().default("./storage")
 });
 

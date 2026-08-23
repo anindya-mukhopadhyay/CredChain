@@ -1,5 +1,15 @@
 export type CredentialStatus = "DRAFT" | "FINALIZED" | "ISSUED" | "REVOKED";
 
+export type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+export type JsonObject = { [key: string]: JsonValue };
+
 export type CredentialSubject = {
   subjectCode: string;
   subjectName: string;
@@ -16,6 +26,8 @@ export type CanonicalCredential = {
   issueDate: string;
   expiryDate?: string | null;
   status: CredentialStatus;
+  finalizedAt?: string | null;
+  payload?: JsonObject;
   semester?: {
     number: number;
     resultStatus: "PASS" | "FAIL" | "WITHHELD";
@@ -25,4 +37,3 @@ export type CanonicalCredential = {
   };
   parentCredentialIds?: string[];
 };
-

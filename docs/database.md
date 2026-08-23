@@ -28,5 +28,9 @@ proof.
 ## Migration Strategy
 
 The backend includes a small migration runner that applies ordered SQL files and records them in
-`schema_migrations`. The first migration is `database/migrations/001_initial_schema.sql`.
+`schema_migrations`. 
+
+Currently applied migrations:
+- `database/migrations/001_initial_schema.sql`: Sets up all core entities, check constraints, and indexes.
+- `database/migrations/002_add_credential_payload.sql`: Alters `credentials` to add the `credential_payload` JSONB column (with GIN index for search optimization) and the `finalized_at` timestamp.
 

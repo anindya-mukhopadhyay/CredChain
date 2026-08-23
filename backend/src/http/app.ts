@@ -2,8 +2,32 @@ import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
 import Fastify from "fastify";
 import type { FastifyInstance } from "fastify";
+import { verifyDatabaseConnection, type DatabaseClient, type TransactionalDatabase } from "../db/pool.js";
+import { loadEnv } from "../config/env.js";
+import { ApiError } from "../errors/apiError.js";
 
-export async function buildApp(): Promise<FastifyInstance> {
+// Repositories
+import { OrganizationRepository } from "../repositories/organizationRepository.js";
+import { CandidateRepository } from "../repositories/candidateRepository.js";
+import { CredentialRepository } from "../repositories/credentialRepository.js";
+import { AuditRepository } from "../repositories/auditRepository.js";
+
+// Services
+import { OrganizationService } from "../services/organizationService.js";
+import { CandidateService } from "../services/candidateService.js";
+import { CredentialService } from "../services/credentialService.js";
+import { BlockchainService } from "../services/blockchain/blockchainService.js";
+
+// Routes
+import { organizationRoutes } from "./routes/organizationRoutes.js";
+import { candidateRoutes } from "./routes/candidateRoutes.js";
+import { credentialRoutes } from "./routes/credentialRoutes.js";
+
+type BuildAppOptions = {
+  database?: DatabaseClient;
+};
+
+export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyInstance> {
   const app = Fastify({
     logger: true
   });
@@ -13,10 +37,47 @@ export async function buildApp(): Promise<FastifyInstance> {
     origin: true
   });
 
-  app.get("/health", async () => ({
-    status: "ok",
-    service: "credchain-backend"
-  }));
+  // Global Error Handler
+  app.setErrorHandler((error: Error & { statusCode?: number; code?: string }, request, reply) => {
+    if (error instanceof ApiError) {
+      reply.code(error.statusCode).send({
+        error: error.code,
+        message: error.message
+      });
+    } else {
+      app.log.error(error);
+      reply.code(error.statusCode || 500).send({
+        error: "INTERNAL_SERVER_ERROR",
+        message: error.message || "An unexpected error occurred"
+      });
+    }
+  });
+
+  app.get("/health", async (_request, reply) => {
+    if (!options.database) {
+      return {
+        status: "ok",
+        service: "credchain-backend",
+        database: "not_configured"
+      };
+    }
+
+    try {
+      await verifyDatabaseConnection(options.database);
+      return {
+        status: "ok",
+        service: "credchain-backend",
+        database: "connected"
+      };
+    } catch {
+      reply.code(503);
+      return {
+        status: "degraded",
+        service: "credchain-backend",
+        database: "unavailable"
+      };
+    }
+  });
 
   app.get("/api/v1/system/modules", async () => ({
     modules: [
@@ -30,6 +91,43 @@ export async function buildApp(): Promise<FastifyInstance> {
     privacyModel: "sensitive data remains off-chain; blockchain stores hashes and minimal metadata"
   }));
 
+  if (options.database) {
+    const env = loadEnv();
+
+    // Instantiate Repositories
+    const orgRepo = new OrganizationRepository(options.database);
+    const candidateRepo = new CandidateRepository(options.database);
+    const credentialRepo = new CredentialRepository(options.database);
+    const auditRepo = new AuditRepository(options.database);
+
+    // Instantiate Services
+    const orgService = new OrganizationService(orgRepo);
+    const candidateService = new CandidateService(candidateRepo);
+
+    // Optional Blockchain Service
+    let blockchainService: BlockchainService | undefined;
+    if (env.CREDENTIAL_REGISTRY_ADDRESS) {
+      blockchainService = new BlockchainService(
+        env.RPC_URL,
+        env.CREDENTIAL_REGISTRY_ADDRESS,
+        env.DEPLOYER_PRIVATE_KEY
+      );
+    }
+
+    const credentialService = new CredentialService(
+      options.database as unknown as TransactionalDatabase,
+      credentialRepo,
+      orgRepo,
+      candidateRepo,
+      auditRepo,
+      blockchainService
+    );
+
+    // Register routes
+    await app.register(organizationRoutes, { service: orgService });
+    await app.register(candidateRoutes, { service: candidateService });
+    await app.register(credentialRoutes, { service: credentialService });
+  }
+
   return app;
 }
-

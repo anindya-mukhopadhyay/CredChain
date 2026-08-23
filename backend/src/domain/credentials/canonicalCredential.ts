@@ -1,7 +1,5 @@
 import { sha256Hex } from "../../lib/hash.js";
-import type { CanonicalCredential } from "./types.js";
-
-type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+import type { CanonicalCredential, JsonValue } from "./types.js";
 
 function sortObject(value: JsonValue): JsonValue {
   if (Array.isArray(value)) {
@@ -27,4 +25,3 @@ export function canonicalizeCredential(credential: CanonicalCredential): string 
 export function hashCanonicalCredential(credential: CanonicalCredential): string {
   return sha256Hex(canonicalizeCredential(credential));
 }
-

@@ -22,12 +22,12 @@ Organization -> Candidate -> Credential -> Canonical hash -> Blockchain proof ->
 
 ## Backend Modules
 
-- `config`: environment validation and runtime settings.
-- `db`: PostgreSQL connection and migrations.
-- `domain/credentials`: canonical credential representation, hashing, and later issuance rules.
-- `http`: Fastify app and routes.
-- Future modules: authentication, organizations, candidates, audit logs, documents, blockchain
-  transaction tracking.
+- `config`: Environment validation and runtime settings.
+- `db`: PostgreSQL connection, pooling, and migration runner.
+- `domain/credentials`: Canonical credential representations, JSON sorting, and SHA-256 hashing.
+- `http`: Fastify API server, Zod route validations, global error handlers, and route handlers.
+- `repositories`: Abstracted PostgreSQL CRUD database access layer.
+- `services`: Business logic services encapsulating database transactions and blockchain client anchoring.
 
 ## Verification Decision
 
