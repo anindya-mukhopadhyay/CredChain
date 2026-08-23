@@ -46,9 +46,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       });
     } else {
       app.log.error(error);
+      const isInternal = !error.statusCode || error.statusCode >= 500;
+      const isProd = process.env.NODE_ENV === "production";
       reply.code(error.statusCode || 500).send({
         error: "INTERNAL_SERVER_ERROR",
-        message: error.message || "An unexpected error occurred"
+        message: (isInternal && isProd) ? "An unexpected internal server error occurred" : (error.message || "An unexpected error occurred")
       });
     }
   });

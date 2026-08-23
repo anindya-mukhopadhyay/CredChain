@@ -1,4 +1,4 @@
-import type { FastifyPluginCallback } from "fastify";
+import type { FastifyPluginCallback, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { CredentialService } from "../../services/credentialService.js";
 import { badRequest, notFound } from "../../errors/apiError.js";
@@ -21,6 +21,13 @@ const revokeCredentialSchema = z.object({
   note: z.string().optional()
 });
 
+function getActorContext(request: FastifyRequest) {
+  const organizationId = typeof request.headers["x-organization-id"] === "string" ? request.headers["x-organization-id"] : undefined;
+  const userId = typeof request.headers["x-user-id"] === "string" ? request.headers["x-user-id"] : undefined;
+  const role = typeof request.headers["x-user-role"] === "string" ? request.headers["x-user-role"] : undefined;
+  return { organizationId, userId, role };
+}
+
 export type CredentialRouteOptions = {
   service: CredentialService;
 };
@@ -40,15 +47,19 @@ export const credentialRoutes: FastifyPluginCallback<CredentialRouteOptions> = (
 
     const data = parseResult.data;
     const credentialNumber = data.credentialNumber || `CC-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+    const actorContext = getActorContext(request);
 
-    const cred = await service.createDraft({
-      credentialNumber,
-      credentialType: data.credentialType,
-      candidateId: data.candidateId,
-      organizationId: data.organizationId,
-      expiryDate: data.expiryDate,
-      credentialPayload: data.payload
-    });
+    const cred = await service.createDraft(
+      {
+        credentialNumber,
+        credentialType: data.credentialType,
+        candidateId: data.candidateId,
+        organizationId: data.organizationId,
+        expiryDate: data.expiryDate,
+        credentialPayload: data.payload
+      },
+      actorContext
+    );
 
     reply.code(201).send(cred);
   });
@@ -86,9 +97,11 @@ export const credentialRoutes: FastifyPluginCallback<CredentialRouteOptions> = (
       throw badRequest(parseResultBody.error.issues[0].message);
     }
 
+    const actorContext = getActorContext(request);
     const updated = await service.updateDraftPayload(
       parseResultId.data.id,
-      parseResultBody.data.payload
+      parseResultBody.data.payload,
+      actorContext
     );
 
     reply.send(updated);
@@ -104,7 +117,8 @@ export const credentialRoutes: FastifyPluginCallback<CredentialRouteOptions> = (
       throw badRequest(parseResult.error.issues[0].message);
     }
 
-    const finalized = await service.finalize(parseResult.data.id);
+    const actorContext = getActorContext(request);
+    const finalized = await service.finalize(parseResult.data.id, actorContext);
     reply.send(finalized);
   });
 
@@ -196,7 +210,8 @@ export const credentialRoutes: FastifyPluginCallback<CredentialRouteOptions> = (
       throw badRequest(parseResult.error.issues[0].message);
     }
 
-    const degree = await service.issueDegree(parseResult.data);
+    const actorContext = getActorContext(request);
+    const degree = await service.issueDegree(parseResult.data, actorContext);
     reply.code(201).send(degree);
   });
 
@@ -229,10 +244,12 @@ export const credentialRoutes: FastifyPluginCallback<CredentialRouteOptions> = (
       throw badRequest(parseResultBody.error.issues[0].message);
     }
 
+    const actorContext = getActorContext(request);
     const revoked = await service.revoke(
       parseResultId.data.id,
       parseResultBody.data.reasonCode,
-      parseResultBody.data.note
+      parseResultBody.data.note,
+      actorContext
     );
 
     reply.send(revoked);

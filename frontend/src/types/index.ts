@@ -137,17 +137,29 @@ export type ConstituentSemesterVerification = {
 export type VerificationStatus =
   | "VERIFIED"
   | "TAMPERED"
+  | "UNTRUSTED_ISSUER"
   | "REVOKED"
   | "ISSUED_WITH_REVOKED_PREREQUISITE"
   | "NOT_FOUND"
   | "INVALID"
   | "PENDING_BLOCKCHAIN";
 
+export type AffectedPrerequisite = {
+  semesterNumber: number;
+  credentialId: string;
+  credentialNumber?: string;
+  status: VerificationStatus;
+  reason: string;
+};
+
 export type VerificationResult = {
   status: VerificationStatus;
+  degreeStatus?: CredentialStatus;
+  affectedPrerequisites?: AffectedPrerequisite[];
   dbHash?: string | null;
   computedHash?: string;
   blockchainHash?: string;
+  issuerAddress?: string | null;
   hashMismatch?: boolean;
   degreeDetails?: {
     programName: string;

@@ -45,6 +45,13 @@ export function StatusBadge({ status, size = "md" }: StatusBadgeProps) {
           <span>REVOKED PREREQUISITE</span>
         </Badge>
       );
+    case "UNTRUSTED_ISSUER":
+      return (
+        <Badge variant="danger" size={size}>
+          <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
+          <span>UNTRUSTED ISSUER</span>
+        </Badge>
+      );
     default:
       return (
         <Badge variant="secondary" size={size}>

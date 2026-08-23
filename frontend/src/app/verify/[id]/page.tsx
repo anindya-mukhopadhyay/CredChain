@@ -225,6 +225,44 @@ export default function VerifyResultPage() {
             This degree credential is registered on-chain, but one or more underlying prerequisite semester credentials
             have been officially REVOKED by the issuing university.
           </p>
+
+          {verifyResult.affectedPrerequisites && verifyResult.affectedPrerequisites.length > 0 && (
+            <div className="bg-rose-900/40 border border-rose-500/40 rounded-xl p-3 space-y-1.5 text-xs">
+              <span className="font-bold text-rose-200 block text-[11px] uppercase tracking-wider">
+                Invalidated Prerequisite Credentials:
+              </span>
+              {verifyResult.affectedPrerequisites.map((p, i) => (
+                <div key={i} className="flex items-center justify-between text-rose-100 bg-rose-950/40 px-2.5 py-1.5 rounded-lg font-mono">
+                  <span>Semester {p.semesterNumber} Marksheet ({p.credentialNumber || p.credentialId.slice(0, 8)})</span>
+                  <span className="bg-rose-500/40 text-rose-200 px-2 py-0.5 rounded text-[10px] font-bold">REVOKED</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 3c. UNTRUSTED_ISSUER */}
+      {verifyResult.status === "UNTRUSTED_ISSUER" && (
+        <div className="bg-amber-700 text-white rounded-2xl p-6 sm:p-8 shadow-xl space-y-4 animate-in zoom-in-95 duration-200">
+          <div className="flex items-start justify-between">
+            <div className="space-y-1">
+              <span className="text-xs uppercase tracking-widest font-bold text-amber-200">
+                Unauthorized Provenance Detected
+              </span>
+              <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
+                UNTRUSTED ISSUER
+              </h2>
+            </div>
+            <div className="p-3 bg-amber-500/40 rounded-2xl border border-amber-400/50">
+              <AlertTriangle className="w-8 h-8 sm:w-10 sm:h-10 text-white" />
+            </div>
+          </div>
+
+          <p className="text-xs text-amber-100 leading-relaxed border-t border-amber-600/50 pt-3">
+            An on-chain record exists for this credential, but the registering Ethereum address ({verifyResult.issuerAddress || "unknown"})
+            is not an authorized issuer holding ISSUER_ROLE on the smart contract registry.
+          </p>
         </div>
       )}
 

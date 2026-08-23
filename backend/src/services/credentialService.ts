@@ -27,14 +27,29 @@ export interface RawSubject {
   marks?: number;
 }
 
+export type ActorContext = {
+  organizationId?: string;
+  userId?: string;
+  role?: string;
+};
+
 export type VerificationStatus =
   | "VERIFIED"
   | "TAMPERED"
+  | "UNTRUSTED_ISSUER"
   | "REVOKED"
   | "ISSUED_WITH_REVOKED_PREREQUISITE"
   | "NOT_FOUND"
   | "INVALID"
   | "PENDING_BLOCKCHAIN";
+
+export type AffectedPrerequisite = {
+  semesterNumber: number;
+  credentialId: string;
+  credentialNumber?: string;
+  status: VerificationStatus;
+  reason: string;
+};
 
 export type ConstituentSemesterVerification = {
   semesterNumber: number;
@@ -51,10 +66,13 @@ export type ConstituentSemesterVerification = {
 
 export type VerificationResult = {
   status: VerificationStatus;
+  degreeStatus?: CredentialStatus;
+  affectedPrerequisites?: AffectedPrerequisite[];
   hashMismatch?: boolean;
   dbHash?: string | null;
   computedHash?: string;
   blockchainHash?: string | null;
+  issuerAddress?: string | null;
   degreeDetails?: {
     programName: string;
     degreeTitle: string;
@@ -172,15 +190,22 @@ export class CredentialService {
     private readonly blockchainService?: BlockchainService
   ) {}
 
-  async createDraft(input: {
-    credentialNumber: string;
-    credentialType: string;
-    candidateId: string;
-    organizationId: string;
-    expiryDate?: string | null;
-    credentialPayload: JsonObject;
-    issuerUserId?: string | null;
-  }): Promise<Credential> {
+  async createDraft(
+    input: {
+      credentialNumber: string;
+      credentialType: string;
+      candidateId: string;
+      organizationId: string;
+      expiryDate?: string | null;
+      credentialPayload: JsonObject;
+      issuerUserId?: string | null;
+    },
+    actorContext?: ActorContext
+  ): Promise<Credential> {
+    if (actorContext?.organizationId && actorContext.organizationId !== input.organizationId) {
+      throw badRequest("Forbidden: Organization mismatch", "FORBIDDEN");
+    }
+
     const candidate = await this.candidateRepo.findById(input.candidateId);
     if (!candidate) throw notFound("Candidate");
 
@@ -208,7 +233,7 @@ export class CredentialService {
 
       await txAuditRepo.create({
         organizationId: input.organizationId,
-        actorUserId: input.issuerUserId || null,
+        actorUserId: input.issuerUserId || actorContext?.userId || null,
         entityType: "credential",
         entityId: credential.id,
         eventType: "CREDENTIAL_CREATED",
@@ -229,9 +254,16 @@ export class CredentialService {
     return this.repo.list(filters);
   }
 
-  async updateDraftPayload(id: string, payload: JsonObject, actorUserId?: string): Promise<Credential> {
+  async updateDraftPayload(id: string, payload: JsonObject, actorContext?: ActorContext | string): Promise<Credential> {
     const credential = await this.repo.findById(id);
     if (!credential) throw notFound("Credential");
+
+    const orgId = typeof actorContext === "object" ? actorContext?.organizationId : undefined;
+    const actorUserId = typeof actorContext === "object" ? actorContext?.userId : actorContext;
+
+    if (orgId && credential.organizationId !== orgId) {
+      throw badRequest("Forbidden: Credential belongs to a different organization", "FORBIDDEN");
+    }
 
     if (credential.status !== "DRAFT") {
       throw badRequest("Only DRAFT credentials can have their payload updated");
@@ -261,9 +293,13 @@ export class CredentialService {
     return updated;
   }
 
-  async finalize(id: string): Promise<Credential> {
+  async finalize(id: string, actorContext?: ActorContext): Promise<Credential> {
     const credential = await this.repo.findById(id);
     if (!credential) throw notFound("Credential");
+
+    if (actorContext?.organizationId && credential.organizationId !== actorContext.organizationId) {
+      throw badRequest("Forbidden: Credential belongs to a different organization", "FORBIDDEN");
+    }
 
     if (credential.status !== "DRAFT") {
       throw badRequest(`Only DRAFT credentials can be finalized, current status: ${credential.status}`);
@@ -346,6 +382,7 @@ export class CredentialService {
 
       await txAuditRepo.create({
         organizationId: credential.organizationId,
+        actorUserId: actorContext?.userId || null,
         entityType: "credential",
         entityId: id,
         eventType: "CREDENTIAL_FINALIZED",
@@ -570,34 +607,27 @@ export class CredentialService {
     };
   }
 
-  async issueDegree(input: {
-    candidateId: string;
-    organizationId: string;
-    programName?: string;
-    degreeTitle?: string;
-    graduationDate?: string;
-    issuerUserId?: string | null;
-  }): Promise<Credential> {
+  async issueDegree(
+    input: {
+      candidateId: string;
+      organizationId: string;
+      programName?: string;
+      degreeTitle?: string;
+      graduationDate?: string;
+      issuerUserId?: string | null;
+    },
+    actorContext?: ActorContext
+  ): Promise<Credential> {
+    if (actorContext?.organizationId && actorContext.organizationId !== input.organizationId) {
+      throw badRequest("Forbidden: Organization mismatch", "FORBIDDEN");
+    }
+
     const eligibility = await this.checkDegreeEligibility(input.candidateId, "BTECH");
     if (!eligibility.isEligible) {
       throw badRequest(
         `Candidate is not eligible for B.Tech Degree: ${eligibility.ineligibilityReasons.join("; ")}`,
         "INELIGIBLE_FOR_DEGREE"
       );
-    }
-
-    const candidate = await this.candidateRepo.findById(input.candidateId);
-    if (!candidate) throw notFound("Candidate");
-
-    if (candidate.organizationId !== input.organizationId) {
-      throw badRequest("Candidate does not belong to the issuing organization", "INVALID_ORGANIZATION");
-    }
-
-    // Check if active degree already exists for this candidate
-    const existingCreds = await this.repo.list({ candidateId: input.candidateId });
-    const existingDegree = existingCreds.find((c) => c.credentialType === "BTECH_DEGREE" && c.status !== "REVOKED");
-    if (existingDegree) {
-      throw badRequest(`B.Tech Degree has already been issued for this candidate (Credential #${existingDegree.credentialNumber})`, "DEGREE_ALREADY_ISSUED");
     }
 
     const semesterCredentialIds = eligibility.semesters.map((s) => s.credentialId!);
@@ -615,37 +645,67 @@ export class CredentialService {
       issueYear: new Date().getFullYear().toString()
     };
 
-    const credentialNumber = `CC-DEG-BTECH-${Date.now().toString().slice(-6)}-${Math.floor(Math.random() * 1000)}`;
+    // Concurrency Hardening: Use PostgreSQL transaction advisory lock on candidate to serialize simultaneous requests
+    const draft = await withTransaction(this.pool, async (client) => {
+      // 1. Acquire transaction-level advisory lock on candidate ID
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`degree_issuance_${input.candidateId}`]);
 
-    let draft: Credential;
-    try {
-      draft = await this.createDraft({
+      // 2. Re-check for active degree inside locked transaction
+      const existingRes = await client.query(
+        "SELECT id, credential_number FROM credentials WHERE candidate_id = $1 AND credential_type = 'BTECH_DEGREE' AND status <> 'REVOKED'",
+        [input.candidateId]
+      );
+      if (existingRes.rows.length > 0) {
+        throw badRequest(
+          `B.Tech Degree has already been issued for this candidate (Credential #${existingRes.rows[0].credential_number})`,
+          "DEGREE_ALREADY_ISSUED"
+        );
+      }
+
+      // 3. Verify candidate & organization ownership
+      const candRes = await client.query("SELECT id, organization_id FROM candidates WHERE id = $1", [input.candidateId]);
+      if (candRes.rows.length === 0) throw notFound("Candidate");
+      if (candRes.rows[0].organization_id !== input.organizationId) {
+        throw badRequest("Candidate does not belong to the issuing organization", "INVALID_ORGANIZATION");
+      }
+
+      const credentialNumber = `CC-DEG-BTECH-${Date.now().toString().slice(-6)}-${Math.floor(Math.random() * 1000)}`;
+
+      const RepoClass = this.repo.constructor as new (db: DatabaseClient) => CredentialRepository;
+      const AuditRepoClass = this.auditRepo.constructor as new (db: DatabaseClient) => AuditRepository;
+      const txRepo = new RepoClass(client);
+      const txAuditRepo = new AuditRepoClass(client);
+
+      const created = await txRepo.createDraft({
         credentialNumber,
         credentialType: "BTECH_DEGREE",
         candidateId: input.candidateId,
         organizationId: input.organizationId,
-        credentialPayload: degreePayload as unknown as JsonObject,
-        issuerUserId: input.issuerUserId
+        credentialPayload: degreePayload as unknown as JsonObject
       });
-    } catch (err: unknown) {
-      const error = err as Error & { code?: string };
-      if (error.message?.includes("unique") || error.code === "23505") {
-        throw badRequest("A B.Tech Degree has already been issued for this candidate", "DEGREE_ALREADY_ISSUED");
+
+      for (const semCredId of semesterCredentialIds) {
+        await txRepo.createRelationship({
+          sourceCredentialId: created.id,
+          targetCredentialId: semCredId,
+          relationshipType: "DERIVED_FROM"
+        });
       }
-      throw err;
-    }
 
-    // Record DERIVED_FROM relationships in PostgreSQL: Degree DERIVED_FROM S_i
-    for (const semCredId of semesterCredentialIds) {
-      await this.repo.createRelationship({
-        sourceCredentialId: draft.id,
-        targetCredentialId: semCredId,
-        relationshipType: "DERIVED_FROM"
+      await txAuditRepo.create({
+        organizationId: input.organizationId,
+        actorUserId: input.issuerUserId || actorContext?.userId || null,
+        entityType: "credential",
+        entityId: created.id,
+        eventType: "CREDENTIAL_CREATED",
+        eventMetadata: { credentialType: "BTECH_DEGREE", credentialNumber }
       });
-    }
 
-    // Finalize the degree
-    const finalized = await this.finalize(draft.id);
+      return created;
+    });
+
+    // Finalize the degree and submit to blockchain
+    const finalized = await this.finalize(draft.id, actorContext);
 
     // Register on-chain relationships for all 8 semesters
     if (this.blockchainService) {
@@ -673,11 +733,11 @@ export class CredentialService {
 
     const isRevokedDb = await this.repo.isRevoked(id);
     if (isRevokedDb || credential.status === "REVOKED") {
-      return { status: "REVOKED" };
+      return { status: "REVOKED", degreeStatus: credential.status };
     }
 
     if (credential.status === "DRAFT") {
-      return { status: "INVALID" };
+      return { status: "INVALID", degreeStatus: credential.status };
     }
 
     const canonical = mapToCanonical(credential);
@@ -687,6 +747,7 @@ export class CredentialService {
     if (computedHash !== dbHash) {
       return {
         status: "TAMPERED",
+        degreeStatus: credential.status,
         hashMismatch: true,
         dbHash,
         computedHash
@@ -695,6 +756,7 @@ export class CredentialService {
 
     let rootStatus: VerificationStatus = "PENDING_BLOCKCHAIN";
     let blockchainHash: string | null = null;
+    let issuerAddress: string | null = null;
 
     if (this.blockchainService) {
       try {
@@ -703,20 +765,36 @@ export class CredentialService {
         if (!proof) {
           rootStatus = "PENDING_BLOCKCHAIN";
         } else if (proof.status === 2) {
-          return { status: "REVOKED" };
+          return { status: "REVOKED", degreeStatus: credential.status };
         } else {
           const computedHashWithPrefix = computedHash.startsWith("0x") ? computedHash : `0x${computedHash}`;
           if (proof.documentHash !== computedHashWithPrefix) {
             return {
               status: "TAMPERED",
+              degreeStatus: credential.status,
               hashMismatch: true,
               dbHash,
               computedHash,
               blockchainHash: proof.documentHash
             };
           }
+
+          // Provenance Verification: Verify that the proof issuer is an authorized issuer on-chain
+          const isAuthorizedIssuer = await this.blockchainService.verifyIssuerProvenance(proof.issuer);
+          if (!isAuthorizedIssuer) {
+            return {
+              status: "UNTRUSTED_ISSUER",
+              degreeStatus: credential.status,
+              dbHash,
+              computedHash,
+              blockchainHash: proof.documentHash,
+              issuerAddress: proof.issuer
+            };
+          }
+
           rootStatus = "VERIFIED";
           blockchainHash = proof.documentHash;
+          issuerAddress = proof.issuer;
         }
       } catch (err: unknown) {
         const error = err as Error;
@@ -783,19 +861,34 @@ export class CredentialService {
       const isChainValid = chainIssues.length === 0 && constituentSemesters.length === 8;
       const verifiedSemestersCount = constituentSemesters.filter((s) => s.status === "VERIFIED" || s.status === "PENDING_BLOCKCHAIN").length;
 
+      const affectedPrerequisites: AffectedPrerequisite[] = constituentSemesters
+        .filter((s) => s.status === "REVOKED")
+        .map((s) => ({
+          semesterNumber: s.semesterNumber,
+          credentialId: s.credentialId,
+          credentialNumber: s.credentialNumber,
+          status: s.status,
+          reason: `Prerequisite Semester ${s.semesterNumber} marksheet has been officially REVOKED`
+        }));
+
       // Revocation semantics: Distinguish degree itself revoked vs degree with revoked prerequisite
       let finalDegreeStatus: VerificationStatus = rootStatus;
       if (constituentSemesters.some((s) => s.status === "REVOKED")) {
         finalDegreeStatus = "ISSUED_WITH_REVOKED_PREREQUISITE";
       } else if (constituentSemesters.some((s) => s.status === "TAMPERED")) {
         finalDegreeStatus = "TAMPERED";
+      } else if (constituentSemesters.some((s) => s.status === "UNTRUSTED_ISSUER")) {
+        finalDegreeStatus = "UNTRUSTED_ISSUER";
       }
 
       return {
         status: finalDegreeStatus,
+        degreeStatus: credential.status,
+        affectedPrerequisites: affectedPrerequisites.length > 0 ? affectedPrerequisites : undefined,
         dbHash,
         computedHash,
         blockchainHash,
+        issuerAddress,
         degreeDetails: {
           programName: payload.programName || "Bachelor of Technology",
           degreeTitle: payload.degreeTitle || "Bachelor of Technology",
@@ -816,15 +909,29 @@ export class CredentialService {
 
     return {
       status: rootStatus,
+      degreeStatus: credential.status,
       dbHash,
       computedHash,
-      blockchainHash
+      blockchainHash,
+      issuerAddress
     };
   }
 
-  async revoke(id: string, reasonCode: string, note?: string, actorUserId?: string): Promise<Credential> {
+  async revoke(
+    id: string,
+    reasonCode: string,
+    note?: string,
+    actorContext?: ActorContext | string
+  ): Promise<Credential> {
     const credential = await this.repo.findById(id);
     if (!credential) throw notFound("Credential");
+
+    const orgId = typeof actorContext === "object" ? actorContext?.organizationId : undefined;
+    const actorUserId = typeof actorContext === "object" ? actorContext?.userId : actorContext;
+
+    if (orgId && credential.organizationId !== orgId) {
+      throw badRequest("Forbidden: Credential belongs to a different organization", "FORBIDDEN");
+    }
 
     if (credential.status === "REVOKED") {
       return credential;

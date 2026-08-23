@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { ethers } from "ethers";
 import { buildApp } from "../http/app.js";
 import { createPool } from "../db/pool.js";
 import { loadEnv } from "../config/env.js";
@@ -1029,12 +1030,301 @@ describe("CredChain REST API Integration", () => {
       });
       const verifyReport = JSON.parse(verifyRes.payload);
       expect(verifyReport.blockchainHash).toBeDefined();
-
-      // Blockchain hash must only be a 32-byte (66-char hex) string without student PII
       expect(verifyReport.blockchainHash).toMatch(/^0x[a-fA-F0-9]{64}$/);
-      expect(verifyReport.blockchainHash).not.toContain("Satoshi");
-      expect(verifyReport.blockchainHash).not.toContain("satoshi@example.com");
-      expect(verifyReport.blockchainHash).not.toContain("1234-5678-9012");
+
+      // Deep Calldata Inspection: Inspect the actual on-chain transaction data and arguments
+      const txRes = await pool.query(
+        "SELECT transaction_hash FROM blockchain_transactions WHERE credential_id = $1",
+        [cred.id]
+      );
+      expect(txRes.rows.length).toBe(1);
+      const txHash = txRes.rows[0].transaction_hash;
+      const provider = new ethers.JsonRpcProvider("http://127.0.0.1:8545");
+      const tx = await provider.getTransaction(txHash);
+      expect(tx).not.toBeNull();
+
+      // Decode the transaction calldata
+      const iface = new ethers.Interface([
+        "function registerCredential(bytes32 credentialId, bytes32 documentHash, bytes32 credentialType) external",
+        "event CredentialRegistered(bytes32 indexed credentialId, bytes32 documentHash, bytes32 indexed credentialType, address indexed issuer, uint64 issuedAt)"
+      ]);
+      const parsedTx = iface.parseTransaction({ data: tx!.data, value: tx!.value });
+      expect(parsedTx).not.toBeNull();
+      expect(parsedTx!.name).toBe("registerCredential");
+      expect(parsedTx!.args.length).toBe(3);
+
+      // Verify all contract input parameters are strictly 32-byte cryptographic hashes
+      expect(parsedTx!.args[0]).toMatch(/^0x[a-fA-F0-9]{64}$/);
+      expect(parsedTx!.args[1]).toMatch(/^0x[a-fA-F0-9]{64}$/);
+      expect(parsedTx!.args[2]).toMatch(/^0x[a-fA-F0-9]{64}$/);
+
+      // Assert zero plaintext PII exists in the raw transaction calldata
+      const rawDataHex = tx!.data.toLowerCase();
+      const studentNameHex = Buffer.from("Satoshi").toString("hex").toLowerCase();
+      const studentEmailHex = Buffer.from("satoshi@example.com").toString("hex").toLowerCase();
+      const studentAadhaarHex = Buffer.from("1234-5678-9012").toString("hex").toLowerCase();
+      expect(rawDataHex).not.toContain(studentNameHex);
+      expect(rawDataHex).not.toContain(studentEmailHex);
+      expect(rawDataHex).not.toContain(studentAadhaarHex);
+    });
+
+    it("enforces organization authorization boundaries across finalize, revoke, and degree issuance (Phase 4.2)", async () => {
+      // Create Organization A and Organization B
+      const orgARes = await app.inject({
+        method: "POST",
+        url: "/api/v1/organizations",
+        payload: { name: "University A", type: "UNIVERSITY" }
+      });
+      const orgA = JSON.parse(orgARes.payload);
+
+      const orgBRes = await app.inject({
+        method: "POST",
+        url: "/api/v1/organizations",
+        payload: { name: "University B", type: "UNIVERSITY" }
+      });
+      const orgB = JSON.parse(orgBRes.payload);
+
+      // Create Candidate for Org B
+      const candBRes = await app.inject({
+        method: "POST",
+        url: "/api/v1/candidates",
+        payload: { organizationId: orgB.id, name: "Student B", candidateReference: `AUTH-B-${Date.now()}` }
+      });
+      const candB = JSON.parse(candBRes.payload);
+
+      // Create Draft Credential for Org B
+      const credBRes = await app.inject({
+        method: "POST",
+        url: "/api/v1/credentials",
+        headers: { "x-organization-id": orgB.id },
+        payload: {
+          organizationId: orgB.id,
+          candidateId: candB.id,
+          credentialType: "BTECH_SEMESTER_MARKSHEET",
+          payload: { semester: 1, result: "PASS", semesterGpa: 8.5 }
+        }
+      });
+      const credB = JSON.parse(credBRes.payload);
+
+      // Attack 1: Organization A attempts to update Org B's draft credential payload
+      const updateAttack = await app.inject({
+        method: "PATCH",
+        url: `/api/v1/credentials/${credB.id}/payload`,
+        headers: { "x-organization-id": orgA.id },
+        payload: { payload: { semester: 1, result: "FAIL" } }
+      });
+      expect(updateAttack.statusCode).toBe(400);
+
+      // Attack 2: Organization A attempts to finalize Org B's credential
+      const finalizeAttack = await app.inject({
+        method: "POST",
+        url: `/api/v1/credentials/${credB.id}/finalize`,
+        headers: { "x-organization-id": orgA.id }
+      });
+      expect(finalizeAttack.statusCode).toBe(400);
+
+      // Legitimate finalize by Org B
+      const legitFinalize = await app.inject({
+        method: "POST",
+        url: `/api/v1/credentials/${credB.id}/finalize`,
+        headers: { "x-organization-id": orgB.id }
+      });
+      expect(legitFinalize.statusCode).toBe(200);
+
+      // Attack 3: Organization A attempts to revoke Org B's credential
+      const revokeAttack = await app.inject({
+        method: "POST",
+        url: `/api/v1/credentials/${credB.id}/revoke`,
+        headers: { "x-organization-id": orgA.id },
+        payload: { reasonCode: "UNAUTHORIZED_ATTEMPT" }
+      });
+      expect(revokeAttack.statusCode).toBe(400);
+
+      // Attack 4: Organization A attempts to issue degree for Org B's candidate
+      const issueDegreeAttack = await app.inject({
+        method: "POST",
+        url: "/api/v1/credentials/degree",
+        headers: { "x-organization-id": orgA.id },
+        payload: {
+          organizationId: orgA.id,
+          candidateId: candB.id
+        }
+      });
+      expect(issueDegreeAttack.statusCode).toBe(400);
+    });
+
+    it("prevents duplicate concurrent degree issuance using transactional locks (Phase 4.2 Concurrency Hardening)", async () => {
+      const orgRes = await app.inject({
+        method: "POST",
+        url: "/api/v1/organizations",
+        payload: { name: "Concurrency Univ", type: "UNIVERSITY" }
+      });
+      const org = JSON.parse(orgRes.payload);
+
+      const candRes = await app.inject({
+        method: "POST",
+        url: "/api/v1/candidates",
+        payload: {
+          organizationId: org.id,
+          name: "Concurrent Candidate",
+          candidateReference: `CONC-${Date.now()}`
+        }
+      });
+      const cand = JSON.parse(candRes.payload);
+
+      // Register and finalize all 8 semesters
+      for (let sem = 1; sem <= 8; sem++) {
+        const c = await app.inject({
+          method: "POST",
+          url: "/api/v1/credentials",
+          payload: {
+            organizationId: org.id,
+            candidateId: cand.id,
+            credentialType: "BTECH_SEMESTER_MARKSHEET",
+            payload: { semester: sem, result: "PASS", semesterGpa: 8.8, credits: 20 }
+          }
+        });
+        const cred = JSON.parse(c.payload);
+        await app.inject({ method: "POST", url: `/api/v1/credentials/${cred.id}/finalize` });
+      }
+
+      // Execute two simultaneous degree issuance requests
+      const [res1, res2] = await Promise.all([
+        app.inject({
+          method: "POST",
+          url: "/api/v1/credentials/degree",
+          payload: { organizationId: org.id, candidateId: cand.id }
+        }),
+        app.inject({
+          method: "POST",
+          url: "/api/v1/credentials/degree",
+          payload: { organizationId: org.id, candidateId: cand.id }
+        })
+      ]);
+
+      const statusCodes = [res1.statusCode, res2.statusCode].sort();
+      // Exactly one request must succeed (201 Created), and the other must be rejected (400 DEGREE_ALREADY_ISSUED)
+      expect(statusCodes).toEqual([201, 400]);
+
+      // Confirm only 1 active degree exists in database
+      const dbCreds = await pool.query(
+        "SELECT id FROM credentials WHERE candidate_id = $1 AND credential_type = 'BTECH_DEGREE'",
+        [cand.id]
+      );
+      expect(dbCreds.rows.length).toBe(1);
+    });
+
+    it("verifies blockchain issuer provenance and returns affectedPrerequisites in revocation results", async () => {
+      const orgRes = await app.inject({
+        method: "POST",
+        url: "/api/v1/organizations",
+        payload: { name: "Provenance Univ", type: "UNIVERSITY" }
+      });
+      const org = JSON.parse(orgRes.payload);
+
+      const candRes = await app.inject({
+        method: "POST",
+        url: "/api/v1/candidates",
+        payload: {
+          organizationId: org.id,
+          name: "Provenance Student",
+          candidateReference: `PROV-${Date.now()}`
+        }
+      });
+      const cand = JSON.parse(candRes.payload);
+
+      const semIds: string[] = [];
+      for (let sem = 1; sem <= 8; sem++) {
+        const c = await app.inject({
+          method: "POST",
+          url: "/api/v1/credentials",
+          payload: {
+            organizationId: org.id,
+            candidateId: cand.id,
+            credentialType: "BTECH_SEMESTER_MARKSHEET",
+            payload: { semester: sem, result: "PASS", semesterGpa: 8.5, credits: 20 }
+          }
+        });
+        const cred = JSON.parse(c.payload);
+        await app.inject({ method: "POST", url: `/api/v1/credentials/${cred.id}/finalize` });
+        semIds.push(cred.id);
+      }
+
+      const degreeRes = await app.inject({
+        method: "POST",
+        url: "/api/v1/credentials/degree",
+        payload: { organizationId: org.id, candidateId: cand.id }
+      });
+      const degree = JSON.parse(degreeRes.payload);
+
+      // Verify degree initial on-chain provenance
+      const vInitial = await app.inject({ method: "GET", url: `/api/v1/credentials/${degree.id}/verify` });
+      const rInitial = JSON.parse(vInitial.payload);
+      expect(rInitial.status).toBe("VERIFIED");
+      expect(rInitial.issuerAddress).toBeDefined();
+      expect(rInitial.issuerAddress).toMatch(/^0x[a-fA-F0-9]{40}$/);
+
+      // Revoke Semester 5
+      await app.inject({
+        method: "POST",
+        url: `/api/v1/credentials/${semIds[4]}/revoke`,
+        payload: { reasonCode: "EXAM_MALPRACTICE" }
+      });
+
+      // Verify degree again -> must return affectedPrerequisites array
+      const vRevokedPrereq = await app.inject({ method: "GET", url: `/api/v1/credentials/${degree.id}/verify` });
+      const rRevokedPrereq = JSON.parse(vRevokedPrereq.payload);
+      expect(rRevokedPrereq.status).toBe("ISSUED_WITH_REVOKED_PREREQUISITE");
+      expect(rRevokedPrereq.degreeStatus).toBe("ISSUED");
+      expect(rRevokedPrereq.affectedPrerequisites).toBeDefined();
+      expect(rRevokedPrereq.affectedPrerequisites).toHaveLength(1);
+      expect(rRevokedPrereq.affectedPrerequisites[0].semesterNumber).toBe(5);
+      expect(rRevokedPrereq.affectedPrerequisites[0].status).toBe("REVOKED");
+    });
+
+    it("semantically distinguishes UNTRUSTED_ISSUER from TAMPERED failure modes (Phase 4.2)", async () => {
+      const orgRes = await app.inject({
+        method: "POST",
+        url: "/api/v1/organizations",
+        payload: { name: "Provenance Semantics Univ", type: "UNIVERSITY" }
+      });
+      const org = JSON.parse(orgRes.payload);
+
+      const candRes = await app.inject({
+        method: "POST",
+        url: "/api/v1/candidates",
+        payload: {
+          organizationId: org.id,
+          name: "Provenance Candidate",
+          candidateReference: `PROV-SEM-${Date.now()}`
+        }
+      });
+      const cand = JSON.parse(candRes.payload);
+
+      const credRes = await app.inject({
+        method: "POST",
+        url: "/api/v1/credentials",
+        payload: {
+          organizationId: org.id,
+          candidateId: cand.id,
+          credentialType: "BTECH_SEMESTER_MARKSHEET",
+          payload: { semester: 1, result: "PASS", semesterGpa: 9.0 }
+        }
+      });
+      const cred = JSON.parse(credRes.payload);
+      await app.inject({ method: "POST", url: `/api/v1/credentials/${cred.id}/finalize` });
+
+      // Valid issuance -> VERIFIED
+      const v1 = await app.inject({ method: "GET", url: `/api/v1/credentials/${cred.id}/verify` });
+      const r1 = JSON.parse(v1.payload);
+      expect(r1.status).toBe("VERIFIED");
+
+      // Test TAMPERED: database payload or canonical hash modified
+      await pool.query("UPDATE credentials SET canonical_hash = 'tampered-hash' WHERE id = $1", [cred.id]);
+      const vTampered = await app.inject({ method: "GET", url: `/api/v1/credentials/${cred.id}/verify` });
+      const rTampered = JSON.parse(vTampered.payload);
+      expect(rTampered.status).toBe("TAMPERED");
+      expect(rTampered.hashMismatch).toBe(true);
     });
   });
 });

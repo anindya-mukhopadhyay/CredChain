@@ -31,6 +31,18 @@ describe("Frontend UI Components", () => {
       render(<StatusBadge status="REVOKED" />);
       expect(screen.getByText("REVOKED")).toBeInTheDocument();
     });
+
+    it("renders ISSUED_WITH_REVOKED_PREREQUISITE and never renders VERIFIED", () => {
+      render(<StatusBadge status="ISSUED_WITH_REVOKED_PREREQUISITE" />);
+      expect(screen.getByText("REVOKED PREREQUISITE")).toBeInTheDocument();
+      expect(screen.queryByText("VERIFIED")).toBeNull();
+    });
+
+    it("renders UNTRUSTED_ISSUER badge correctly", () => {
+      render(<StatusBadge status="UNTRUSTED_ISSUER" />);
+      expect(screen.getByText("UNTRUSTED ISSUER")).toBeInTheDocument();
+      expect(screen.queryByText("VERIFIED")).toBeNull();
+    });
   });
 
   describe("Alert", () => {

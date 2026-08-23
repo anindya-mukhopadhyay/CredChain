@@ -7,7 +7,10 @@ const CREDENTIAL_REGISTRY_ABI = [
   "function isCredentialValid(bytes32 credentialId) external view returns (bool)",
   "function getCredential(bytes32 credentialId) external view returns (tuple(bytes32 documentHash, bytes32 credentialType, address issuer, uint64 issuedAt, uint8 status))",
   "function revokeCredential(bytes32 credentialId, bytes32 reasonCode) external",
-  "function addCredentialRelationship(bytes32 sourceCredentialId, bytes32 targetCredentialId, uint8 relationshipType) external"
+  "function addCredentialRelationship(bytes32 sourceCredentialId, bytes32 targetCredentialId, uint8 relationshipType) external",
+  "function getCredentialRelationships(bytes32 credentialId) external view returns (tuple(bytes32 sourceCredentialId, bytes32 targetCredentialId, uint8 relationshipType)[])",
+  "function hasRole(bytes32 role, address account) external view returns (bool)",
+  "function ISSUER_ROLE() external view returns (bytes32)"
 ];
 
 export type BlockchainCredentialProof = {
@@ -149,6 +152,19 @@ export class BlockchainService {
       }));
     } catch {
       return [];
+    }
+  }
+
+  async verifyIssuerProvenance(issuerAddress: string): Promise<boolean> {
+    if (!issuerAddress || issuerAddress === ethers.ZeroAddress) {
+      return false;
+    }
+    try {
+      const contract = this.getContract(false);
+      const issuerRole = ethers.keccak256(ethers.toUtf8Bytes("ISSUER_ROLE"));
+      return await contract.hasRole(issuerRole, issuerAddress);
+    } catch {
+      return false;
     }
   }
 }
