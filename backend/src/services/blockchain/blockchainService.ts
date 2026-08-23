@@ -167,4 +167,26 @@ export class BlockchainService {
       return false;
     }
   }
+
+  async checkReadiness(): Promise<{ isReady: boolean; chainId?: number; blockNumber?: number; error?: string }> {
+    if (!this.provider) {
+      return { isReady: false, error: "Blockchain provider not configured" };
+    }
+    try {
+      const [network, blockNumber] = await Promise.all([
+        this.provider.getNetwork(),
+        this.provider.getBlockNumber()
+      ]);
+      return {
+        isReady: true,
+        chainId: Number(network.chainId),
+        blockNumber
+      };
+    } catch (err: unknown) {
+      return {
+        isReady: false,
+        error: err instanceof Error ? err.message : "RPC unavailable"
+      };
+    }
+  }
 }

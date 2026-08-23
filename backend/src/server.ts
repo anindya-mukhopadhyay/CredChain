@@ -13,6 +13,22 @@ try {
     await pool.end();
   });
 
+  // Graceful shutdown handling for SIGTERM and SIGINT
+  const signals: NodeJS.Signals[] = ["SIGTERM", "SIGINT"];
+  for (const signal of signals) {
+    process.on(signal, async () => {
+      console.log(`\nReceived ${signal}. Initiating graceful shutdown...`);
+      try {
+        await app.close();
+        console.log("CredChain backend HTTP server closed and pool drained.");
+        process.exit(0);
+      } catch (err) {
+        console.error("Error during graceful shutdown:", err);
+        process.exit(1);
+      }
+    });
+  }
+
   await app.listen({
     host: "0.0.0.0",
     port: env.BACKEND_PORT

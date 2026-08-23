@@ -9,7 +9,10 @@ export type TransactionalDatabase = pg.Pool;
 export function createPool(connectionString = loadEnv().DATABASE_URL): pg.Pool {
   return new Pool({
     connectionString,
-    max: 10
+    max: 20,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 5000,
+    allowExitOnIdle: false
   });
 }
 

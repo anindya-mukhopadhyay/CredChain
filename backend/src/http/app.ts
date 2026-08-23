@@ -1,11 +1,10 @@
-import cors from "@fastify/cors";
+import Fastify, { type FastifyInstance } from "fastify";
 import helmet from "@fastify/helmet";
+import cors from "@fastify/cors";
 import cookie from "@fastify/cookie";
 import rateLimit from "@fastify/rate-limit";
-import Fastify from "fastify";
-import type { FastifyInstance } from "fastify";
-import { verifyDatabaseConnection, type DatabaseClient, type TransactionalDatabase } from "../db/pool.js";
 import { loadEnv } from "../config/env.js";
+import { verifyDatabaseConnection, type DatabaseClient, type TransactionalDatabase } from "../db/pool.js";
 import { ApiError } from "../errors/apiError.js";
 
 // Repositories
@@ -33,11 +32,26 @@ import { credentialRoutes } from "./routes/credentialRoutes.js";
 
 type BuildAppOptions = {
   database?: DatabaseClient;
+  blockchainService?: BlockchainService;
 };
 
 export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyInstance> {
+  const env = loadEnv();
+
   const app = Fastify({
-    logger: true
+    logger: {
+      level: process.env.LOG_LEVEL || (env.NODE_ENV === "production" ? "info" : "debug"),
+      redact: [
+        "req.headers.authorization",
+        "req.headers.cookie",
+        "req.headers['set-cookie']",
+        "body.password",
+        "body.token",
+        "body.newPassword",
+        "*.passwordHash",
+        "*.privateKey"
+      ]
+    }
   });
 
   await app.register(helmet);
@@ -60,7 +74,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     } else {
       app.log.error(error);
       const isInternal = !error.statusCode || error.statusCode >= 500;
-      const isProd = process.env.NODE_ENV === "production";
+      const isProd = env.NODE_ENV === "production";
       reply.code(error.statusCode || 500).send({
         error: "INTERNAL_SERVER_ERROR",
         message: (isInternal && isProd) ? "An unexpected internal server error occurred" : (error.message || "An unexpected error occurred")
@@ -68,30 +82,83 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     }
   });
 
+  // Initialize or accept Blockchain Service
+  const blockchainService = options.blockchainService ?? (
+    env.CREDENTIAL_REGISTRY_ADDRESS
+      ? new BlockchainService(env.RPC_URL, env.CREDENTIAL_REGISTRY_ADDRESS, env.DEPLOYER_PRIVATE_KEY)
+      : undefined
+  );
+
+  app.get("/health/live", async () => ({
+    status: "alive",
+    timestamp: new Date().toISOString()
+  }));
+
   app.get("/health", async (_request, reply) => {
+    let dbStatus = "not_configured";
+    if (options.database) {
+      try {
+        await verifyDatabaseConnection(options.database);
+        dbStatus = "connected";
+      } catch {
+        dbStatus = "unavailable";
+      }
+    }
+
+    let blockchainStatus = "not_configured";
+    if (blockchainService) {
+      const bcReady = await blockchainService.checkReadiness();
+      blockchainStatus = bcReady.isReady ? "connected" : "unavailable";
+    }
+
+    const isHealthy = dbStatus !== "unavailable" && blockchainStatus !== "unavailable";
+    if (!isHealthy) {
+      reply.code(503);
+    }
+
+    return {
+      status: isHealthy ? "ok" : "degraded",
+      service: "credchain-backend",
+      database: dbStatus,
+      blockchain: blockchainStatus,
+      environment: env.NODE_ENV
+    };
+  });
+
+  app.get("/health/ready", async (_request, reply) => {
     if (!options.database) {
-      return {
-        status: "ok",
-        service: "credchain-backend",
-        database: "not_configured"
-      };
+      reply.code(503);
+      return { status: "not_ready", reason: "Database not configured" };
     }
 
     try {
       await verifyDatabaseConnection(options.database);
-      return {
-        status: "ok",
-        service: "credchain-backend",
-        database: "connected"
-      };
     } catch {
       reply.code(503);
       return {
-        status: "degraded",
-        service: "credchain-backend",
+        status: "not_ready",
         database: "unavailable"
       };
     }
+
+    if (blockchainService) {
+      const bcReady = await blockchainService.checkReadiness();
+      if (!bcReady.isReady) {
+        reply.code(503);
+        return {
+          status: "not_ready",
+          database: "connected",
+          blockchain: "unavailable"
+        };
+      }
+    }
+
+    return {
+      status: "ready",
+      database: "connected",
+      blockchain: blockchainService ? "connected" : "not_configured",
+      timestamp: new Date().toISOString()
+    };
   });
 
   app.get("/api/v1/system/modules", async () => ({
@@ -110,8 +177,6 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   }));
 
   if (options.database) {
-    const env = loadEnv();
-
     // Instantiate Repositories
     const orgRepo = new OrganizationRepository(options.database);
     const candidateRepo = new CandidateRepository(options.database);
@@ -132,16 +197,6 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       } catch (seedErr) {
         app.log.warn(`Demo user seeding note: ${(seedErr as Error).message}`);
       }
-    }
-
-    // Optional Blockchain Service
-    let blockchainService: BlockchainService | undefined;
-    if (env.CREDENTIAL_REGISTRY_ADDRESS) {
-      blockchainService = new BlockchainService(
-        env.RPC_URL,
-        env.CREDENTIAL_REGISTRY_ADDRESS,
-        env.DEPLOYER_PRIVATE_KEY
-      );
     }
 
     const credentialService = new CredentialService(

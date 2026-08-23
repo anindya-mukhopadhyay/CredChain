@@ -9,7 +9,8 @@
     "typecheck": "hardhat compile && tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
     "node": "hardhat node",
-    "deploy:local": "hardhat run scripts/deploy.ts --network localhost"
+    "deploy:local": "hardhat run scripts/deploy.ts --network localhost",
+    "deploy:contract": "hardhat run scripts/deploy.ts --network localhost"
   },
   "dependencies": {
     "@openzeppelin/contracts": "^5.0.2"

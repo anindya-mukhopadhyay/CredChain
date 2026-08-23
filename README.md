@@ -1,188 +1,131 @@
 # CredChain
 
-CredChain is a blockchain-backed credential verification MVP. It keeps sensitive academic,
-employment, and personal data off-chain while anchoring cryptographic proofs on an EVM-compatible
-blockchain for tamper-evident verification.
+CredChain is an enterprise-grade academic credential chain and verification platform. It maintains complete candidate confidentiality by keeping sensitive identity records, course marks, and degree transcripts strictly off-chain in PostgreSQL while anchoring tamper-evident cryptographic proofs on an EVM-compatible blockchain.
 
-## Problem Statement
+---
 
-Academic and professional credentials are easy to alter after issuance and difficult for third
-parties to verify independently. CredChain addresses this by combining a secure off-chain
-application database with on-chain credential fingerprints, issuer authorization, revocation, and
-relationship tracking.
+## Key Capabilities
 
-## Solution
+* **Academic Credential Chain**: 8-semester B.Tech academic pipeline with prerequisite tracking, CGPA calculation, and academic classification.
+* **Degree Eligibility Engine & Issuance**: Automated evaluation of all 8 semesters with concurrency protection against duplicate degree issuance.
+* **Recursive Multi-Layer Verification**: Verification engine recursively audits prerequisite chains, detecting tamper propagation or revoked prerequisites.
+* **Zero-PII Blockchain Proofs**: Only deterministic 32-byte SHA-256 canonical hashes are anchored on the `CredentialRegistry` smart contract.
+* **Security & Authentication**:
+  * Salted Bcrypt password hashing (10 rounds).
+  * `HttpOnly`, `SameSite=Lax`, `Secure` cookie session management (zero `localStorage` token storage).
+  * CSRF defense for state-changing requests.
+  * Role-Based Access Control (`SUPER_ADMIN`, `ORGANIZATION_ADMIN`, `ISSUER`, `VERIFIER`) and multi-tenant organization isolation.
+* **QR Verification & Sharing**: Clean, zero-PII QR code generator and modal for instant public verification.
+* **Production Observability**: Fastify structured logging with sensitive field redaction, liveness (`/health/live`), and readiness (`/health/ready`) probes.
 
-CredChain stores candidate profiles, semester results, credential documents, audit logs, and other
-sensitive application data in PostgreSQL and controlled storage. For finalized credentials, the
-backend generates a deterministic canonical representation, hashes it with SHA-256, and registers
-only the proof and minimal metadata on-chain.
+---
 
-The blockchain record is not a claim that the original information is true. It is a durable proof
-that a credential fingerprint was issued by an authorized issuer at a point in time and has not
-changed since anchoring.
+## Architecture Overview
 
-## Architecture
-
-```text
-frontend/
-backend/
-blockchain/
-database/
-docs/
+```
+                                  Client Browser
+                                        ↓
+                           TLS / Reverse Proxy (Nginx)
+                                        ↓
+                        ┌───────────────┴───────────────┐
+                        ↓                               ↓
+           Next.js Frontend (:3000)            Fastify API (:4000)
+           (Interactive Dashboard & UI)                 ↓
+                                            ┌───────────┴───────────┐
+                                            ↓                       ↓
+                                      PostgreSQL 16          EVM Blockchain RPC
+                                      (Off-Chain Data)      (CredentialRegistry)
 ```
 
-- `frontend`: planned Next.js verification portal and organization dashboard.
-- `backend`: TypeScript Fastify API, hashing logic, database integration, blockchain integration.
-- `blockchain`: Hardhat project containing Solidity contracts and tests.
-- `database`: PostgreSQL migrations.
-- `docs`: architecture, blockchain, database, and security notes.
+---
 
-## Data Flow
+## Monorepo Structure
 
 ```text
-Organization
-  -> Candidate
-  -> Semester or credential record
-  -> Canonical credential JSON
-  -> SHA-256 hash
-  -> Smart contract proof
-  -> Verification portal
+├── backend/          # Fastify + TypeScript REST API, Repositories, Domain Services
+├── frontend/         # Next.js 14 (App Router), React, Tailwind CSS, Lucide Icons
+├── blockchain/       # Hardhat, Solidity 0.8.24 (CredentialRegistry), Ethers.js v6
+├── database/         # PostgreSQL sequential SQL migrations (001, 002, 003)
+├── scripts/          # Operational backup & disaster recovery scripts
+└── docs/             # Architecture, Database, Blockchain, Security, & Deployment guides
 ```
 
-Verification compares the current off-chain canonical hash against the stored database hash and
-the on-chain proof. A credential is not shown as verified unless both checks pass and the credential
-has not been revoked.
+---
 
-## Privacy Model
+## Local Development Quick Start
 
-Do not write personally identifiable or sensitive data to public blockchain storage. This includes
-raw marks, addresses, phone numbers, email addresses, ID numbers, student photos, answer sheets, and
-full PDFs. QR codes should contain only a credential ID or verification URL.
+### 1. Prerequisites
+* Node.js >= 20.x
+* Docker & Docker Compose (for PostgreSQL)
 
-## Technology Choices
-
-- Node.js and TypeScript for backend services.
-- Fastify for the API foundation.
-- PostgreSQL for normalized off-chain data.
-- Hardhat, Solidity, Ethers.js, and OpenZeppelin for blockchain development.
-- SHA-256 for deterministic off-chain credential fingerprints.
-- Next.js, TypeScript, and Tailwind CSS planned for the frontend phase.
-
-## Local Setup
-
-Install dependencies:
-
+### 2. Install Dependencies
 ```bash
 npm install
 ```
 
-Copy environment variables:
-
+### 3. Configure Environment
 ```bash
 cp .env.example .env
 ```
 
-Start PostgreSQL:
-
+### 4. Start PostgreSQL & Run Migrations
 ```bash
 docker compose up -d postgres
-```
-
-Run database migrations:
-
-```bash
 npm run db:migrate -w @credchain/backend
 ```
 
-Compile smart contracts:
-
+### 5. Start Local Blockchain Node & Deploy Contract
 ```bash
-npm run compile -w @credchain/blockchain
-```
-
-Run smart-contract tests:
-
-```bash
-npm run test -w @credchain/blockchain
-```
-
-Run backend tests:
-
-```bash
-npm run test -w @credchain/backend
-```
-
-Start a local Hardhat node:
-
-```bash
+# Terminal 1: Start local node
 npm run node -w @credchain/blockchain
+
+# Terminal 2: Deploy CredentialRegistry contract
+npm run deploy:contract -w @credchain/blockchain
 ```
 
-Deploy locally in another terminal:
-
+### 6. Start Backend & Frontend
 ```bash
-npm run deploy:local -w @credchain/blockchain
-```
-
-Start the backend:
-
-```bash
+# Terminal 3: Start Fastify API
 npm run dev -w @credchain/backend
+
+# Terminal 4: Start Next.js Frontend
+npm run dev -w @credchain/frontend
+```
+Access the application at `http://localhost:3000`.
+
+---
+
+## Production Verification Suite
+
+Execute the full 4-step monorepo validation matrix:
+
+```bash
+# 1. Run all unit & integration tests (Backend, Blockchain, Frontend)
+npm run test
+
+# 2. Run TypeScript typechecking
+npm run typecheck -w @credchain/backend && npm run typecheck -w @credchain/frontend
+
+# 3. Run ESLint code quality checks
+npm run lint -w @credchain/backend && npm run lint -w @credchain/frontend
+
+# 4. Build production bundles
+npm run build -w @credchain/backend && npm run build -w @credchain/frontend
 ```
 
-## Environment Variables
+---
 
-See `.env.example` for the first required variables:
+## Operations & Disaster Recovery
 
-- `DATABASE_URL`
-- `JWT_SECRET`
-- `RPC_URL`
-- `CHAIN_ID`
-- `CREDENTIAL_REGISTRY_ADDRESS`
-- `DOCUMENT_STORAGE_ROOT`
-
-Never commit real secrets, private keys, production database passwords, or API keys.
-
-## Demo Workflow Target
-
-The first MVP flow is:
-
-```text
-Create organization
-  -> create candidate
-  -> create semester 1 result
-  -> finalize result
-  -> hash canonical credential
-  -> register proof on local blockchain
-  -> verify unchanged credential
-  -> demonstrate tamper mismatch
-```
-
-The planned B.Tech scenario extends this to:
-
-```text
-S1 -> S2 -> S3 -> S4 -> S5 -> S6 -> S7 -> S8 -> Degree
-```
-
-## Current Status
-
-This repository currently contains the Phase 1 foundation:
-
-- Monorepo structure.
-- Backend TypeScript service skeleton.
-- Deterministic credential canonicalization and hashing utility.
-- PostgreSQL initial migration.
-- Hardhat Solidity development environment.
-- Initial `CredentialRegistry` contract and tests.
-- Architecture, blockchain, database, and security documentation.
-
-## Future Improvements
-
-- Authentication and role-aware API authorization.
-- Full credential issuance and verification APIs.
-- Document generation and QR verification.
-- Frontend dashboard and public verification portal.
-- Demo seed data for a fictional B.Tech student and a company credential issuer.
-- CI workflow for linting, tests, and smart-contract checks.
-
+* **Database Backup**:
+  ```bash
+  DATABASE_URL="postgres://..." ./scripts/db-backup.sh ./backups
+  ```
+* **Database Restore**:
+  ```bash
+  DATABASE_URL="postgres://..." ./scripts/db-restore.sh ./backups/credchain_backup_YYYYMMDD_HHMMSS.sql.gz
+  ```
+* **Readiness Health Check**:
+  ```bash
+  curl -f http://localhost:4000/health/ready
+  ```
