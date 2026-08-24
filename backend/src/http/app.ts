@@ -64,6 +64,20 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     global: false
   });
 
+  // Gracefully handle empty application/json bodies
+  app.addContentTypeParser("application/json", { parseAs: "string" }, (_req, body, done) => {
+    if (!body || (typeof body === "string" && body.trim() === "")) {
+      done(null, {});
+      return;
+    }
+    try {
+      const json = JSON.parse(body as string);
+      done(null, json);
+    } catch (err: unknown) {
+      done(err as Error, undefined);
+    }
+  });
+
   // Global Error Handler
   app.setErrorHandler((error: Error & { statusCode?: number; code?: string }, _request, reply) => {
     if (error instanceof ApiError) {

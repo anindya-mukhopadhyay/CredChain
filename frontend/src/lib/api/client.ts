@@ -37,7 +37,7 @@ export async function apiClient<T>(endpoint: string, options: RequestOptions = {
 
   const config: RequestInit = {
     headers: {
-      "Content-Type": "application/json",
+      ...(customConfig.body !== undefined ? { "Content-Type": "application/json" } : {}),
       ...headers,
     },
     credentials: "include", // Sends HttpOnly cookie automatically without client token storage
