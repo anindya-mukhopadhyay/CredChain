@@ -7,9 +7,10 @@ const scriptSrc = isProd
   ? "script-src 'self' 'unsafe-inline'"
   : "script-src 'self' 'unsafe-eval' 'unsafe-inline'";
 
+const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000 http://127.0.0.1:4000";
 const connectSrc = isProd
-  ? "connect-src 'self' " + (process.env.NEXT_PUBLIC_API_URL || "")
-  : "connect-src 'self' http://localhost:4000 ws://localhost:3000 http://127.0.0.1:4000";
+  ? `connect-src 'self' ${apiUrl}`
+  : `connect-src 'self' http://localhost:4000 ws://localhost:3000 http://127.0.0.1:4000 ${apiUrl}`;
 
 const cspHeader = `
   default-src 'self';
