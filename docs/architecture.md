@@ -1,47 +1,121 @@
-# CredChain Architecture
+# CredChain Architecture Specification
 
-## Goals
+## 1. System Goals & Design Principles
 
-CredChain is designed as a modular MVP that proves tamper-evident credential verification without
-putting sensitive data on-chain.
+CredChain is engineered as an enterprise-grade academic credential platform that provides tamper-evident cryptographic provenance without storing sensitive student PII or transcripts on-chain.
 
-The first production-shaped flow is:
+### Core Principles
+1. **Zero-PII On-Chain**: The blockchain stores only 32-byte cryptographic hashes (`bytes32`), credential IDs, issuer addresses, and status flags.
+2. **Deterministic Canonical Hashing**: All JSON payload fields are sorted lexicographically before SHA-256 hashing to guarantee exact hash reproducibility.
+3. **Recursive DAG Verification**: Higher-order credentials (such as B.Tech Degrees) cryptographically link to their constituent semester marksheets and verify prerequisite integrity recursively.
+4. **Multi-Tenant Organization Isolation**: Strict tenancy guarantees ensure university data cannot be accessed, modified, or revoked across institutions.
 
-```text
-Organization -> Candidate -> Credential -> Canonical hash -> Blockchain proof -> Verification
+---
+
+## 2. End-to-End Component Flow
+
+```
++-----------------------------------------------------------------------------------+
+|                                 Next.js Frontend                                  |
+|         (Dashboard, Marksheet Builder, Degree Hub, Public Verification)           |
++-----------------------------------------+-----------------------------------------+
+                                          | HTTP / JSON (HttpOnly Session Cookie)
+                                          v
++-----------------------------------------------------------------------------------+
+|                                Fastify API Server                                 |
+|  - Plugins: @fastify/helmet, @fastify/cors, @fastify/cookie, @fastify/rate-limit  |
+|  - Auth: JWT token verification, CSRF defense, organization tenancy guard         |
+|  - Routes: Auth, Users, Organizations, Candidates, Credentials, Verify, Audits    |
++-----------------------------------------+-----------------------------------------+
+                                          |
+                                          v
++-----------------------------------------------------------------------------------+
+|                                 Business Services                                 |
+|  - AuthService: Salted Bcrypt hashing, session issuance, demo account seeding     |
+|  - UserService: Multi-tenant user provisioning, role assignments, status toggles  |
+|  - CandidateService: Candidate registration, search, and profile management       |
+|  - CredentialService: Draft creation, canonicalization, DAG degree eligibility    |
+|  - BlockchainService: Ethers.js v6 JSON-RPC client, contract interaction          |
++-------------------+---------------------------------------+-----------------------+
+                    |                                       |
+                    v                                       v
++-----------------------------------+   +-------------------------------------------+
+|      Repository Layer (CRUD)      |   |            Smart Contract Layer           |
+|  - UserRepository                 |   |  - CredentialRegistry.sol (Solidity 0.8)  |
+|  - OrganizationRepository         |   |  - EVM Storage:                           |
+|  - CandidateRepository            |   |      * documentHash (bytes32)             |
+|  - CredentialRepository           |   |      * issuer (address)                   |
+|  - AuditRepository                |   |      * status (ACTIVE, REVOKED)           |
++-------------------+---------------+   |      * relationships (parent/child)       |
+                    |                   +-------------------------------------------+
+                    v
++-----------------------------------+
+|           PostgreSQL 16           |
+|  - Off-chain confidential storage |
+|  - Multi-tenant foreign keys      |
+|  - Immutable audit trail logs     |
++-----------------------------------+
 ```
 
-## Boundaries
+---
 
-- The frontend renders dashboards, credential details, QR-based verification, and audit history.
-- The backend owns authentication, authorization, canonicalization, database writes, blockchain
-  transactions, and verification decisions.
-- PostgreSQL stores sensitive and operational data off-chain.
-- The blockchain stores credential IDs, document hashes, issuer identity, status, revocation state,
-  and credential relationships.
+## 3. Academic Credential DAG & B.Tech Degree Pipeline
 
-## Backend Modules
+CredChain models academic degrees as a Directed Acyclic Graph (DAG) of prerequisite semester marksheets.
 
-- `config`: Environment validation and runtime settings.
-- `db`: PostgreSQL connection, pooling, and migration runner.
-- `domain/credentials`: Canonical credential representations, JSON sorting, and SHA-256 hashing.
-- `http`: Fastify API server, Zod route validations, global error handlers, and route handlers.
-- `repositories`: Abstracted PostgreSQL CRUD database access layer.
-- `services`: Business logic services encapsulating database transactions and blockchain client anchoring.
+```
+  [Sem 1 Marksheet] ──► Canonical Hash ──► Smart Contract Proof #1
+  [Sem 2 Marksheet] ──► Canonical Hash ──► Smart Contract Proof #2
+  [Sem 3 Marksheet] ──► Canonical Hash ──► Smart Contract Proof #3
+  [Sem 4 Marksheet] ──► Canonical Hash ──► Smart Contract Proof #4
+  [Sem 5 Marksheet] ──► Canonical Hash ──► Smart Contract Proof #5
+  [Sem 6 Marksheet] ──► Canonical Hash ──► Smart Contract Proof #6
+  [Sem 7 Marksheet] ──► Canonical Hash ──► Smart Contract Proof #7
+  [Sem 8 Marksheet] ──► Canonical Hash ──► Smart Contract Proof #8
+                           │
+                           ▼
+  ===================================================================
+     Automated Degree Eligibility Engine (CandidateService / SQL)
+     * All 8 Semesters Completed? (Yes)
+     * All 8 Semesters Passed? (Yes)
+     * Credit-weighted Cumulative GPA Calculation (CGPA)
+     * Academic Classification (Distinction / First Class / Second Class)
+  ===================================================================
+                           │
+                           ▼
+  [B.Tech Degree Certificate]
+  (Payload embeds array of 8 constituent semester credential IDs)
+                           │
+                           ▼
+  [Cryptographic Commitment Root]
+  Deterministic SHA-256 hash across degree payload + constituent links
+                           │
+                           ▼
+  [Smart Contract Anchoring] ──► CredentialRegistry Proof #9
+                           │
+                           ▼
+  [Public Verification Portal]
+  Recursively evaluates all 8 prerequisite marksheets in real-time
+```
 
-## Verification Decision
+---
 
-A credential can be shown as verified only when:
+## 4. Verification Decision Engine
 
-- The credential exists in the database.
-- The credential is not revoked.
-- The current canonical representation hashes to the stored database hash.
-- The same hash is active in the smart contract.
-- The issuer is authorized for the organization and credential type.
+When a recruiter or verifier queries `/api/v1/credentials/:id/verify`, the verification engine executes the following decision matrix:
 
-## Extensibility
-
-The data model avoids university-only assumptions. A B.Tech semester marksheet, company training
-certificate, internship certificate, and professional credential all use the same credential
-foundation with optional domain-specific detail tables.
-
+1. **Existence Check**: Queries the off-chain database. If not found, returns `NOT_FOUND`.
+2. **Draft Check**: If status is `DRAFT`, returns `INVALID` (cannot verify unfinalized drafts).
+3. **Database Revocation Check**: If marked `REVOKED` in the database or revocation registry, returns `REVOKED`.
+4. **Canonical Integrity Check**: Recomputes the deterministic SHA-256 hash from the live operational payload and compares it against `credential.canonical_hash`. If mismatched, returns `TAMPERED`.
+5. **Blockchain Proof Check**: Queries `CredentialRegistry.getCredential(id)` via `BlockchainService`:
+   * If on-chain status is revoked (`status === 2`), returns `REVOKED`.
+   * If on-chain `documentHash` differs from the computed canonical hash, returns `TAMPERED`.
+   * If on-chain `issuer` address lacks `ISSUER_ROLE`, returns `UNTRUSTED_ISSUER`.
+   * If proof is not yet indexed or node is unreachable, returns `PENDING_BLOCKCHAIN`.
+6. **Recursive Constituent Prerequisite Audit** (for `BTECH_DEGREE`):
+   * Recursively executes verification for all 8 constituent semester credentials.
+   * If any constituent semester is `REVOKED`, returns **`ISSUED_WITH_REVOKED_PREREQUISITE`** and lists the affected semester IDs.
+   * If any constituent semester is `TAMPERED`, returns `TAMPERED`.
+   * If any constituent semester is `UNTRUSTED_ISSUER`, returns `UNTRUSTED_ISSUER`.
+7. **Success**: If all checks pass, returns **`VERIFIED`** along with safe, publicly disclosable academic metadata.

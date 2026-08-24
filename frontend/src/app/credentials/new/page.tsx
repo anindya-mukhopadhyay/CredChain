@@ -103,7 +103,7 @@ function NewCredentialContent() {
     setSubjects(updated);
   };
 
-  // Calculate live GPA
+  // Grade Points Scale
   const gradePoints: Record<string, number> = {
     O: 10,
     "A+": 10,
@@ -113,6 +113,7 @@ function NewCredentialContent() {
     "C+": 6,
     C: 5,
     D: 4,
+    P: 4,
     F: 0,
   };
 
@@ -120,23 +121,49 @@ function NewCredentialContent() {
   let weightedPoints = 0;
   for (const sub of subjects) {
     const pts = gradePoints[sub.grade.toUpperCase()] ?? 0;
-    totalCredits += Number(sub.credits) || 0;
-    weightedPoints += pts * (Number(sub.credits) || 0);
+    const creds = Number(sub.credits) || 0;
+    totalCredits += creds;
+    weightedPoints += pts * creds;
   }
   const computedGpa = totalCredits > 0 ? (weightedPoints / totalCredits).toFixed(2) : "0.00";
 
+  // Client-side validation function
+  const validateForm = (): string | null => {
+    if (!organizationId) return "Please select an issuing organization.";
+    if (!candidateId) return "Please select a candidate student.";
+    if (!program.trim()) return "Academic program name is required.";
+    if (!academicYear.trim()) return "Academic session / year is required.";
+    if (subjects.length === 0) return "Please add at least one subject module.";
+
+    const seenCodes = new Set<string>();
+    for (let i = 0; i < subjects.length; i++) {
+      const s = subjects[i];
+      const code = s.subjectCode.trim().toUpperCase();
+      const name = s.subjectName.trim();
+      const creds = Number(s.credits);
+
+      if (!code) return `Subject #${i + 1} code cannot be empty.`;
+      if (!name) return `Subject #${i + 1} title cannot be empty.`;
+      if (isNaN(creds) || creds <= 0 || creds > 20) {
+        return `Subject ${code} has invalid credits (${s.credits}). Credits must be between 1 and 20.`;
+      }
+      if (s.marks !== undefined && s.marks !== null && (s.marks < 0 || s.marks > 100)) {
+        return `Subject ${code} has invalid marks (${s.marks}). Marks must be between 0 and 100.`;
+      }
+      if (seenCodes.has(code)) {
+        return `Duplicate subject code '${code}' detected. Each subject module in a semester must have a unique code.`;
+      }
+      seenCodes.add(code);
+    }
+
+    return null;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!organizationId) {
-      setError("Please select an issuing organization.");
-      return;
-    }
-    if (!candidateId) {
-      setError("Please select a candidate recipient.");
-      return;
-    }
-    if (subjects.length === 0) {
-      setError("Please add at least one subject.");
+    const validationError = validateForm();
+    if (validationError) {
+      setError(validationError);
       return;
     }
 
@@ -146,16 +173,16 @@ function NewCredentialContent() {
 
       const payload = {
         semester: Number(semester),
-        academicYear,
-        program,
+        academicYear: academicYear.trim(),
+        program: program.trim(),
         result,
         semesterGpa: Number(computedGpa),
         subjects: subjects.map((s) => ({
-          subjectCode: s.subjectCode.trim(),
+          subjectCode: s.subjectCode.trim().toUpperCase(),
           subjectName: s.subjectName.trim(),
           credits: Number(s.credits) || 0,
           grade: s.grade.trim().toUpperCase(),
-          marks: s.marks ? Number(s.marks) : undefined,
+          marks: s.marks !== undefined && s.marks !== null ? Number(s.marks) : undefined,
         })),
       };
 
@@ -200,7 +227,7 @@ function NewCredentialContent() {
           <div>
             <div className="font-bold text-indigo-950">Looking to Issue an 8-Semester B.Tech Degree?</div>
             <div className="text-indigo-800">
-              Evaluate full academic eligibility, CGPA calculations, and issue Merkle-anchored degree certificates.
+              Evaluate full academic eligibility, CGPA calculations, and issue cryptographic DAG-anchored degree certificates.
             </div>
           </div>
         </div>
@@ -299,7 +326,7 @@ function NewCredentialContent() {
           <CardHeader className="flex flex-row items-center justify-between">
             <div>
               <CardTitle className="text-base">Subject Grades & Results</CardTitle>
-              <CardDescription>Add all registered course modules and grades</CardDescription>
+              <CardDescription>Add all registered course modules, credits, and grades</CardDescription>
             </div>
             <Button
               type="button"
@@ -319,7 +346,7 @@ function NewCredentialContent() {
                     <th className="px-3 py-2.5">Code</th>
                     <th className="px-3 py-2.5">Subject Name</th>
                     <th className="px-3 py-2.5 w-20">Credits</th>
-                    <th className="px-3 py-2.5 w-24">Grade</th>
+                    <th className="px-3 py-2.5 w-28">Grade</th>
                     <th className="px-3 py-2.5 w-20">Marks</th>
                     <th className="px-3 py-2.5 text-right w-12"></th>
                   </tr>
@@ -335,7 +362,7 @@ function NewCredentialContent() {
                             handleSubjectChange(index, "subjectCode", e.target.value)
                           }
                           placeholder="CS101"
-                          className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded font-mono text-xs focus:ring-1 focus:ring-sky-500 focus:border-sky-500"
+                          className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded font-mono text-xs focus:ring-1 focus:ring-sky-500 focus:border-sky-500 uppercase"
                           required
                         />
                       </td>
@@ -355,7 +382,7 @@ function NewCredentialContent() {
                         <input
                           type="number"
                           min="1"
-                          max="10"
+                          max="20"
                           value={sub.credits}
                           onChange={(e) =>
                             handleSubjectChange(index, "credits", Number(e.target.value))
@@ -372,15 +399,16 @@ function NewCredentialContent() {
                           }
                           className="w-full px-2 py-1.5 bg-white border border-slate-200 rounded text-xs focus:ring-1 focus:ring-sky-500 focus:border-sky-500 font-semibold"
                         >
-                          <option value="O">O (10)</option>
-                          <option value="A+">A+ (10)</option>
-                          <option value="A">A (9)</option>
-                          <option value="B+">B+ (8)</option>
-                          <option value="B">B (7)</option>
-                          <option value="C+">C+ (6)</option>
-                          <option value="C">C (5)</option>
-                          <option value="D">D (4)</option>
-                          <option value="F">F (0)</option>
+                          <option value="O">O (10 pts)</option>
+                          <option value="A+">A+ (10 pts)</option>
+                          <option value="A">A (9 pts)</option>
+                          <option value="B+">B+ (8 pts)</option>
+                          <option value="B">B (7 pts)</option>
+                          <option value="C+">C+ (6 pts)</option>
+                          <option value="C">C (5 pts)</option>
+                          <option value="D">D (4 pts)</option>
+                          <option value="P">P (4 pts)</option>
+                          <option value="F">F (0 pts)</option>
                         </select>
                       </td>
                       <td className="px-3 py-2">
@@ -402,6 +430,7 @@ function NewCredentialContent() {
                           onClick={() => handleRemoveSubject(index)}
                           disabled={subjects.length <= 1}
                           className="text-slate-400 hover:text-rose-600 disabled:opacity-30 transition-colors p-1"
+                          title="Remove subject"
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
@@ -418,7 +447,7 @@ function NewCredentialContent() {
                 <div className="flex items-center gap-2">
                   <Calculator className="w-5 h-5 text-indigo-600" />
                   <div>
-                    <span className="text-xs text-slate-500 block">Computed Semester GPA</span>
+                    <span className="text-xs text-slate-500 block">Computed Semester SGPA</span>
                     <span className="text-lg font-bold text-slate-900">{computedGpa} / 10.0</span>
                   </div>
                 </div>
@@ -429,7 +458,7 @@ function NewCredentialContent() {
               </div>
 
               <div className="flex items-center gap-2">
-                <span className="text-xs font-semibold text-slate-700">Overall Result:</span>
+                <span className="text-xs font-semibold text-slate-700">Semester Result:</span>
                 <select
                   value={result}
                   onChange={(e) => setResult(e.target.value as "PASS" | "FAIL" | "WITHHELD")}
@@ -458,7 +487,7 @@ function NewCredentialContent() {
             </Button>
           </Link>
           <Button type="submit" isLoading={isSubmitting} disabled={isLoading || candidates.length === 0}>
-            Save as Draft Credential
+            Save as Draft Marksheet
           </Button>
         </div>
       </form>

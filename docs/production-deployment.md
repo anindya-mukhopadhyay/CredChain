@@ -4,15 +4,15 @@
 
 ```
                                   Internet
-                                     ↓
+                                     │
                           TLS / Reverse Proxy (Nginx)
-                                     ↓
+                                     │
                      ┌───────────────┴───────────────┐
-                     ↓                               ↓
+                     ▼                               ▼
         Next.js Frontend (:3000)            Fastify API (:4000)
-        (Static & React Components)                  ↓
+        (Static & React Components)                  │
                                          ┌───────────┴───────────┐
-                                         ↓                       ↓
+                                         ▼                       ▼
                                    PostgreSQL 16          EVM Blockchain RPC
                                    (Off-Chain Data)      (CredentialRegistry)
 ```
@@ -22,17 +22,17 @@
 ## 2. Environment Configurations: Local vs. Production
 
 ### Development Environment
-*   **Blockchain**: Local Hardhat node running on `http://127.0.0.1:8545` (Chain ID `31337`).
-*   **Database**: Local PostgreSQL instance (`localhost:5432`).
-*   **Security**: Development JWT secret and optional demo user auto-seeding enabled (`ENABLE_DEMO_SEED=true`).
-*   **Frontend CSP**: Allows `'unsafe-eval'` for webpack/HMR hot-reloading.
+* **Blockchain**: Local Hardhat node running on `http://127.0.0.1:8545` (Chain ID `31337`).
+* **Database**: Local PostgreSQL instance (`localhost:5432`).
+* **Security**: Development JWT secret and demo user auto-seeding enabled (`ENABLE_DEMO_SEED=true`).
+* **Frontend CSP**: Allows `'unsafe-eval'` for webpack/HMR hot-reloading.
 
 ### Production / Testnet Environment
-*   **Blockchain**: Public/Private EVM network (e.g. Sepolia testnet or Polygon/Ethereum mainnet) via high-availability RPC endpoints (Infura, Alchemy, QuickNode).
-*   **Database**: Managed PostgreSQL 16 (e.g. AWS RDS, GCP Cloud SQL) with TLS/SSL enforced.
-*   **Security**: Cryptographically generated 32+ character `JWT_SECRET`. Automatic demo seeding is strictly locked out.
-*   **Frontend CSP**: **Strictly eliminates `'unsafe-eval'`**. Retains `'unsafe-inline'` for Next.js App Router hydration and styling.
-*   **Safety Guards**: In `backend/src/config/env.ts`, startup automatically aborts if placeholder secrets or missing contract addresses are detected when `NODE_ENV=production`.
+* **Blockchain**: Public/Private EVM network (e.g. Sepolia testnet or Polygon/Ethereum mainnet) via high-availability RPC endpoints (Infura, Alchemy, QuickNode).
+* **Database**: Managed PostgreSQL 16 (e.g. AWS RDS, GCP Cloud SQL) with TLS/SSL enforced.
+* **Security**: Cryptographically generated 32+ character `JWT_SECRET`. Automatic demo seeding is strictly disabled.
+* **Frontend CSP**: **Strictly eliminates `'unsafe-eval'`**. Retains `'unsafe-inline'` for Next.js App Router hydration and styling.
+* **Safety Guards**: In `backend/src/config/env.ts`, startup automatically aborts if placeholder secrets or missing contract addresses are detected when `NODE_ENV=production`.
 
 ---
 
@@ -45,13 +45,27 @@
 4. `FAILED`: If RPC times out, reverts, or fails, the transaction is marked `FAILED` in `blockchain_transactions`. The credential status remains unconfirmed, preventing false verification claims.
 
 ### RPC Failure Semantics
-*   **Unreachable RPC**: `BlockchainService.checkReadiness()` returns `isReady: false`.
-*   **Readiness Probe (`GET /health/ready`)**: Returns `503 Service Unavailable` with `status: not_ready, blockchain: unavailable`.
-*   **Verification Safety**: When blockchain proof cannot be fetched or verified, `CredentialVerificationService` marks verification as incomplete/pending—it **never** falsely reports `VERIFIED`.
+* **Unreachable RPC**: `BlockchainService.checkReadiness()` returns `isReady: false`.
+* **Readiness Probe (`GET /health/ready`)**: Returns `503 Service Unavailable` with `status: not_ready, blockchain: unavailable`.
+* **Verification Safety**: When blockchain proof cannot be fetched or verified, `CredentialVerificationService` marks verification as incomplete/pending—it **never** falsely reports `VERIFIED`.
 
 ---
 
-## 4. Step-by-Step Deployment Runbook
+## 4. Production Release Checklist (v1.0.0)
+
+- [ ] Smart contract deployed to target network and verified on block explorer.
+- [ ] `CREDENTIAL_REGISTRY_ADDRESS` and `RPC_URL` configured in backend environment.
+- [ ] PostgreSQL 16 database provisioned with encrypted storage and automated backups.
+- [ ] All sequential database migrations executed (`001_initial_schema.sql`, `002_academic_pipeline.sql`, `003_auth_and_rbac.sql`).
+- [ ] Cryptographically random 32+ char `JWT_SECRET` generated and secured in secret manager.
+- [ ] `ENABLE_DEMO_SEED=false` and `NODE_ENV=production` verified in production `.env`.
+- [ ] TLS certificate installed on reverse proxy with HTTP to HTTPS redirect.
+- [ ] Rate limiting verified on public `/api/v1/credentials/:id/verify` endpoint.
+- [ ] Health probes `/health` and `/health/ready` integrated into container orchestrator.
+
+---
+
+## 5. Step-by-Step Deployment Runbook
 
 ### Step 1: Smart Contract Deployment (Blockchain)
 1. Configure `RPC_URL` and `DEPLOYER_PRIVATE_KEY` in environment or secret manager.
@@ -94,7 +108,7 @@
 
 ---
 
-## 5. Reverse Proxy Configuration (Nginx Example)
+## 6. Reverse Proxy Configuration (Nginx Example)
 
 ```nginx
 limit_req_zone $binary_remote_addr zone=api_limit:10m rate=20r/s;

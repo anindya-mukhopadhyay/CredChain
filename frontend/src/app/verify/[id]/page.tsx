@@ -137,7 +137,7 @@ export default function VerifyResultPage() {
                 Official Authenticity Report
               </span>
               <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
-                CREDENTIAL VERIFIED
+                ✓ CREDENTIAL VERIFIED
               </h2>
             </div>
             <div className="p-3 bg-emerald-500/40 rounded-2xl border border-emerald-400/50">
@@ -171,7 +171,7 @@ export default function VerifyResultPage() {
                 Security Warning
               </span>
               <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
-                TAMPERING DETECTED
+                ⚠ CREDENTIAL INTEGRITY FAILED
               </h2>
             </div>
             <div className="p-3 bg-rose-500/40 rounded-2xl border border-rose-400/50">
@@ -222,7 +222,7 @@ export default function VerifyResultPage() {
                 Prerequisite Invalidation Detected
               </span>
               <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
-                REVOKED PREREQUISITE
+                DEGREE HAS A REVOKED PREREQUISITE
               </h2>
             </div>
             <div className="p-3 bg-rose-500/40 rounded-2xl border border-rose-400/50">
@@ -260,7 +260,7 @@ export default function VerifyResultPage() {
                 Unauthorized Provenance Detected
               </span>
               <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
-                UNTRUSTED ISSUER
+                ISSUER COULD NOT BE TRUSTED
               </h2>
             </div>
             <div className="p-3 bg-amber-500/40 rounded-2xl border border-amber-400/50">
@@ -283,7 +283,9 @@ export default function VerifyResultPage() {
               <span className="text-xs uppercase tracking-widest font-bold text-sky-300">
                 Pending Ledger Confirmation
               </span>
-              <h2 className="text-2xl font-bold mt-1">PENDING BLOCKCHAIN</h2>
+              <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
+                BLOCKCHAIN VERIFICATION PENDING
+              </h2>
             </div>
             <Clock className="w-8 h-8 text-sky-300" />
           </div>
@@ -411,11 +413,10 @@ export default function VerifyResultPage() {
                           </td>
                           <td className="px-4 py-2.5 text-center">
                             <span
-                              className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                                sem.isPassed
+                              className={`px-2 py-0.5 rounded text-[10px] font-bold ${sem.isPassed
                                   ? "bg-emerald-100 text-emerald-800"
                                   : "bg-rose-100 text-rose-800"
-                              }`}
+                                }`}
                             >
                               {sem.isPassed ? "PASS" : "FAIL"}
                             </span>
@@ -428,15 +429,14 @@ export default function VerifyResultPage() {
                           </td>
                           <td className="px-4 py-2.5 text-right">
                             <span
-                              className={`inline-flex items-center gap-1 font-bold text-[11px] ${
-                                sem.status === "VERIFIED"
+                              className={`inline-flex items-center gap-1 font-bold text-[11px] ${sem.status === "VERIFIED"
                                   ? "text-emerald-700"
                                   : sem.status === "TAMPERED"
-                                  ? "text-rose-700"
-                                  : sem.status === "REVOKED"
-                                  ? "text-rose-800"
-                                  : "text-amber-700"
-                              }`}
+                                    ? "text-rose-700"
+                                    : sem.status === "REVOKED"
+                                      ? "text-rose-800"
+                                      : "text-amber-700"
+                                }`}
                             >
                               {sem.status === "VERIFIED" ? (
                                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 inline" />

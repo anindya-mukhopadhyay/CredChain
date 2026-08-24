@@ -6,6 +6,18 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
   useSearchParams: () => ({ get: vi.fn().mockReturnValue(null) }),
   useParams: () => ({ id: "mock-id" }),
+  usePathname: () => "/",
+}));
+
+vi.mock("@/context/AuthContext", () => ({
+  useAuth: () => ({
+    user: null,
+    isLoading: false,
+    login: vi.fn(),
+    logout: vi.fn(),
+    hasRole: () => false,
+  }),
+  AuthProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
 
 import { StatusBadge } from "@/components/credentials/StatusBadge";
@@ -158,6 +170,20 @@ describe("Frontend UI Components", () => {
       expect(screen.getByText("Copy Link")).toBeInTheDocument();
       expect(screen.getByText("Download QR")).toBeInTheDocument();
       expect(screen.getByText("Verify Portal")).toBeInTheDocument();
+    });
+  });
+
+  describe("HomePage Landing", () => {
+    it("renders landing hero and primary action buttons", async () => {
+      const { default: HomePage } = await import("@/app/page");
+      render(<HomePage />);
+      expect(screen.getByText(/Verify Academic Credentials with/)).toBeInTheDocument();
+      expect(screen.getByText("Cryptographic Trust")).toBeInTheDocument();
+      expect(screen.getByText("Verify a Credential")).toBeInTheDocument();
+      expect(screen.getByText("Issuer Login")).toBeInTheDocument();
+      expect(screen.getByText("How CredChain Works")).toBeInTheDocument();
+      expect(screen.getByText("Deterministic Credential States")).toBeInTheDocument();
+      expect(screen.getByText("Enterprise Security & Privacy Architecture")).toBeInTheDocument();
     });
   });
 });

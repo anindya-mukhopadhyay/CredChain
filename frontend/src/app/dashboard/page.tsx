@@ -22,7 +22,9 @@ import {
   ArrowUpRight,
   PlusCircle,
   Activity,
-  Building2,
+  GraduationCap,
+  Search,
+  UserPlus,
 } from "lucide-react";
 
 export default function DashboardPage() {
@@ -42,8 +44,8 @@ export default function DashboardPage() {
         listAuditLogs(),
       ]);
       setStats(statsData);
-      setRecentCredentials(credsData.slice(0, 5));
-      setRecentAudits(auditData.slice(0, 5));
+      setRecentCredentials(credsData.slice(0, 6));
+      setRecentAudits(auditData.slice(0, 6));
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Failed to load dashboard metrics";
       setError(message);
@@ -60,7 +62,7 @@ export default function DashboardPage() {
     return (
       <div className="h-96 flex flex-col items-center justify-center gap-3 text-slate-400">
         <Spinner size="lg" className="text-sky-600" />
-        <p className="text-sm font-medium">Loading organization dashboard...</p>
+        <p className="text-sm font-medium">Loading organization dashboard metrics...</p>
       </div>
     );
   }
@@ -135,23 +137,31 @@ export default function DashboardPage() {
             Overview of student records, credential lifecycles, and blockchain proofs.
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2.5">
+
+        {/* Quick Actions */}
+        <div className="flex flex-wrap items-center gap-2">
           <Link href="/credentials/new">
-            <Button size="sm" className="gap-1.5">
+            <Button size="sm" className="gap-1.5 shadow-2xs">
               <PlusCircle className="w-4 h-4" />
               Issue Marksheet
             </Button>
           </Link>
+          <Link href="/credentials/degree">
+            <Button variant="outline" size="sm" className="gap-1.5 text-indigo-700 border-indigo-200 hover:bg-indigo-50">
+              <GraduationCap className="w-4 h-4" />
+              Degree Hub
+            </Button>
+          </Link>
           <Link href="/candidates/new">
             <Button variant="outline" size="sm" className="gap-1.5">
-              <Users className="w-4 h-4" />
+              <UserPlus className="w-4 h-4" />
               New Candidate
             </Button>
           </Link>
-          <Link href="/organizations">
-            <Button variant="outline" size="sm" className="gap-1.5">
-              <Building2 className="w-4 h-4" />
-              Organizations
+          <Link href="/verify">
+            <Button variant="outline" size="sm" className="gap-1.5 text-slate-700">
+              <Search className="w-4 h-4 text-emerald-600" />
+              Verify
             </Button>
           </Link>
         </div>
