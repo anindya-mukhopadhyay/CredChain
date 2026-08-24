@@ -42,6 +42,25 @@ function getVerifiedActorContext(request: FastifyRequest): ActorContext {
   return { organizationId: orgHeader, userId: userHeader, role: roleHeader };
 }
 
+function extractCleanId(raw: string | undefined): string {
+  if (!raw) return "";
+  let clean = raw.trim();
+  try {
+    clean = decodeURIComponent(clean);
+  } catch {}
+  if (clean.includes("%3A") || clean.includes("%2F")) {
+    try {
+      clean = decodeURIComponent(clean);
+    } catch {}
+  }
+  if (clean.includes("/") || clean.startsWith("http://") || clean.startsWith("https://")) {
+    const withoutQuery = clean.split(/[?#]/)[0];
+    const segments = withoutQuery.split("/").filter(Boolean);
+    if (segments.length > 0) return segments[segments.length - 1].trim();
+  }
+  return clean;
+}
+
 export type CredentialRouteOptions = {
   service: CredentialService;
 };
@@ -187,11 +206,14 @@ export const credentialRoutes: FastifyPluginCallback<CredentialRouteOptions> = (
       }
     },
     async (request, reply) => {
+      const rawParams = request.params as { id?: string };
+      const cleanId = extractCleanId(rawParams?.id);
+
       const idParamSchema = z.object({
         id: z.string().uuid("Invalid credential ID format")
       });
 
-      const parseResult = idParamSchema.safeParse(request.params);
+      const parseResult = idParamSchema.safeParse({ id: cleanId });
       if (!parseResult.success) {
         throw badRequest(parseResult.error.issues[0].message);
       }

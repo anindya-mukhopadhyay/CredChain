@@ -6,6 +6,7 @@ import { useAuth } from "@/context/AuthContext";
 import { Menu, Search, ShieldCheck, ArrowRight, LogIn, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
+import { extractCredentialId } from "@/lib/utils";
 
 interface TopNavProps {
   onMenuClick: () => void;
@@ -18,8 +19,9 @@ export function TopNav({ onMenuClick }: TopNavProps) {
 
   const handleQuickVerify = (e: React.FormEvent) => {
     e.preventDefault();
-    if (quickVerifyId.trim()) {
-      router.push(`/verify/${encodeURIComponent(quickVerifyId.trim())}`);
+    const cleanId = extractCredentialId(quickVerifyId);
+    if (cleanId) {
+      router.push(`/verify/${encodeURIComponent(cleanId)}`);
       setQuickVerifyId("");
     }
   };

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Card, CardContent } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { ShieldCheck, Search, Lock, Database, ArrowRight } from "lucide-react";
+import { extractCredentialId } from "@/lib/utils";
 
 export default function VerifyPortalPage() {
   const [credentialId, setCredentialId] = useState("");
@@ -13,7 +14,7 @@ export default function VerifyPortalPage() {
 
   const handleVerify = (e: React.FormEvent) => {
     e.preventDefault();
-    const cleanId = credentialId.trim();
+    const cleanId = extractCredentialId(credentialId);
     if (!cleanId) {
       setError("Please enter a valid Credential ID or UUID");
       return;

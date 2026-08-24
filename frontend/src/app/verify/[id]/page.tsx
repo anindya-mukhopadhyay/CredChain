@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   verifyCredential,
@@ -19,7 +19,7 @@ import type {
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Spinner } from "@/components/ui/Spinner";
-import { formatDate } from "@/lib/utils";
+import { formatDate, extractCredentialId } from "@/lib/utils";
 import { CredentialShareModal } from "@/components/credentials/CredentialShareModal";
 import {
   CheckCircle2,
@@ -34,7 +34,9 @@ import {
 
 export default function VerifyResultPage() {
   const params = useParams();
-  const id = params.id as string;
+  const router = useRouter();
+  const rawId = params.id as string;
+  const id = extractCredentialId(rawId);
 
   const [verifyResult, setVerifyResult] = useState<VerificationResult | null>(null);
   const [credential, setCredential] = useState<Credential | null>(null);
@@ -43,6 +45,12 @@ export default function VerifyResultPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isShareOpen, setIsShareOpen] = useState(false);
+
+  useEffect(() => {
+    if (rawId && id && rawId !== id) {
+      router.replace(`/verify/${encodeURIComponent(id)}`);
+    }
+  }, [rawId, id, router]);
 
   const runVerification = async () => {
     if (!id) return;
